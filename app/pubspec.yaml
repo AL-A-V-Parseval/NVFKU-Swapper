@@ -1,0 +1,27 @@
+name: nvfku_ui
+description: A Linux-native installer for community DLSS 5 routes, driven by the nvfku engine.
+publish_to: none
+version: 0.1.0
+
+# Deliberately dependency-free beyond the SDK.  The engine is a Python process
+# the UI drives over JSON, so there is no FFI, no code generation, and nothing
+# to keep in step with a third-party release.
+environment:
+  sdk: ">=3.7.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Chinese needs real MaterialLocalizations. `DefaultMaterialLocalizations`
+  # ships English only, and a zh locale with no matching delegate makes every
+  # Material widget throw at build time.
+  flutter_localizations:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,33 @@
+# Isolation: keep every toolchain artifact out of the repository and out of $HOME
+.venv/
+.pub-cache/
+app/.dart_tool/
+app/build/
+app/linux/flutter/ephemeral/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Engine runtime state, if anyone points DLSS5_STATE_DIR here
+state/
+backups/
+cache/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# The vendored model: NVIDIA's proprietary 158 MiB nvngx_dlssnr.dll, which must
+# never be committed. A checkout syncs it instead (`nvfku model --mirror-sync`);
+# vendor/README.md records the expected digest. `vendor/*` rather than `vendor/`
+# because git cannot re-include a file beneath an excluded directory, and that
+# README has to stay tracked.
+vendor/*
+!vendor/README.md
+
+# Release archives: ~119 MiB each, rebuilt on demand by tools/make_release.py.
+dist/
