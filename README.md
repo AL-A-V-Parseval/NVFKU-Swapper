@@ -1,4 +1,4 @@
-# dlss5-swapper-linux
+# NVFKU-Swapper
 
 A Linux-native installer for community DLSS 5 routes, in the spirit of
 [DLSS5-Swapper](https://github.com/rakanki911/DLSS5-Swapper) but built around
