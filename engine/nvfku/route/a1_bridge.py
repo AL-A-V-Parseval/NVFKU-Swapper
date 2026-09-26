@@ -16,8 +16,10 @@ Why this route is shaped the way it is
     is ``1``; on Linux the ReShade proxy device's descriptors are already
     native and vkd3d re-translating them faults.  This is the difference
     between the documented Linux success report and a crash.
-*   ``nvngx_dlssnr.dll`` is NVIDIA's and is never downloaded or copied by this
-    tool.  It is located, verified and *referenced*.
+*   ``nvngx_dlssnr.dll`` is NVIDIA's.  This module locates and verifies it,
+    and ``install()`` copies the chosen build beside the executable.  When no
+    tested build is present the plan offers a pinned download rather than only
+    complaining; see ``weights.py``.
 """
 
 from __future__ import annotations
@@ -58,16 +60,6 @@ BRIDGE_ADDON = "dlss5-bridge.addon64"
 ADDON_DLL = "dlssnr-linux.addon64"
 ADDON_FORWARDER = "nvngx.dll_nrfwd.dll"
 BRIDGE_CFG = "dlss5-bridge.cfg"
-
-#: English fallback for the Vulkan explanation.  The plan and ``is_viable``
-#: render it through ``text(language, "a1.vulkan_note")``; the constant stays
-#: importable for callers that have no language to hand.
-VULKAN_NOTE = (
-    "ReShade's Vulkan installation method is a Vulkan layer, and Wine's "
-    "winevulkan never enumerates third-party layers, so this route only "
-    "supports D3D11/D3D12 games."
-)
-
 
 def launch_options(game: Game, language: str | None = None) -> tuple[str, str]:
     """Steam launch options, correct for this Proton build.

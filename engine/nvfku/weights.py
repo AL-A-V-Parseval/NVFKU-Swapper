@@ -30,7 +30,6 @@ guess where a 158 MiB binary came from or who signed it.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import shutil
 import urllib.error
@@ -39,7 +38,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import Paths, human_size
+from .paths import Paths, human_size, sha256_file
 
 #: The build NapXDD measured as stable with addon-dlssnr-linux v0.2.2, and the one
 #: `model.TESTED_SHA256` names. Kept as a literal here too so this module does not
@@ -161,13 +160,6 @@ RTX50_SOURCE = Source(
 
 SOURCES: tuple[Source, ...] = (RTX50_SOURCE,)
 
-#: Where the pinned archive came from upstream. Recorded because it is the honest
-#: answer to "why do you trust this URL": it is the same one DLSS5-Feeder's own
-#: installer uses, chosen there over Discord CDN links because those expire.
-DISCOVERED_FROM = (
-    "https://raw.githubusercontent.com/jlrouzies-fr/DLSS5-Feeder/main/tools/Install-DLSS5Feeder.ps1"
-)
-
 
 class WeightsError(RuntimeError):
     """A model could not be obtained, with the reason a user can act on."""
@@ -194,12 +186,6 @@ def source_for(build: Build) -> Source | None:
     return None
 
 
-def _digest(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
 
 
 def _proxy_url() -> str | None:
@@ -303,7 +289,7 @@ def extract(source: Source, archive: Path, cache: Path) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     inner = out / MODEL_NAME
 
-    if inner.is_file() and _digest(inner) == source.build.sha256:
+    if inner.is_file() and sha256_file(inner) == source.build.sha256:
         return inner
 
     try:
@@ -322,7 +308,7 @@ def extract(source: Source, archive: Path, cache: Path) -> Path:
             f"{source.archive} is not a valid zip; it was removed, so retry the download"
         ) from None
 
-    digest = _digest(inner)
+    digest = sha256_file(inner)
     if digest != source.build.sha256:
         inner.unlink(missing_ok=True)
         raise WeightsError(
@@ -364,7 +350,7 @@ def install(
     """
     cached = download(paths, source, logger=logger)
     destination = game_dir / MODEL_NAME
-    if destination.is_file() and _digest(destination) == source.build.sha256:
+    if destination.is_file() and sha256_file(destination) == source.build.sha256:
         logger(f"  present  {destination}")
         return destination
     shutil.copy2(cached, destination)

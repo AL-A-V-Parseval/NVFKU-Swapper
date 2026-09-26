@@ -34,11 +34,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .paths import Paths, atomic_write_text, human_size
+from .paths import Paths, human_size
 from .steam import Game
 
 #: Image families, widest use first. `library_600x900` is the portrait poster
@@ -65,9 +64,6 @@ LOCAL_CACHE_DIR = Path("appcache/librarycache")
 # desktop with a scaled display should show.
 _SCALE_SUFFIXES = ("_2x", "")
 
-
-class ArtworkError(RuntimeError):
-    """Artwork could not be fetched. Never fatal to the caller."""
 
 
 @dataclass
@@ -272,37 +268,4 @@ def load_index(paths: Paths) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def save_index(paths: Paths, index: dict) -> None:
-    atomic_write_text(index_path(paths), json.dumps(index, indent=2, sort_keys=True))
 
-
-def ensure_library_artwork(
-    paths: Paths,
-    games: list[Game],
-    *,
-    kind: str = "poster",
-    language: str | None = "schinese",
-    force: bool = False,
-    logger=print,
-) -> list[ArtworkResult]:
-    """Fetch artwork for a whole library, recording what was found.
-
-    The index lets the UI answer "which games have a cover" without hitting the
-    filesystem for every row on every frame.
-    """
-    index = load_index(paths) if not force else {}
-    results: list[ArtworkResult] = []
-    for game in games:
-        result = ensure_artwork(paths, game, kind=kind, language=language, force=force, logger=logger)
-        results.append(result)
-        index[game.appid] = {
-            "path": str(result.path) if result.found else None,
-            "family": result.family,
-            "localised": result.localised,
-            "source": result.source,
-            "at": time.time(),
-        }
-        if result.found:
-            logger(f"  {game.name}: {result.describe()}")
-    save_index(paths, index)
-    return results

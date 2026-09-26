@@ -137,8 +137,8 @@ EN: dict[str, str] = {
     ),
     "a1.check.nr_model.block_detail": "{name} not found on this machine",
     "a1.check.nr_model.block_fix": (
-        "it is NVIDIA's and is never downloaded by this tool; put a copy where the "
-        "game can see it"
+        "it is NVIDIA's and is not on this machine. Run 'nvfku model --fetch' to get "
+        "the tested build (digest-checked), or put a copy where the game can see it"
     ),
     "a1.missing.model.what": "{name} ({size}, sha256 {sha}...)",
     "a1.missing.model.why": (
@@ -317,7 +317,8 @@ ZH: dict[str, str] = {
     ),
     "a1.check.nr_model.block_detail": "本机未找到 {name}",
     "a1.check.nr_model.block_fix": (
-        "它属于 NVIDIA，本工具从不下载它；请把副本放到游戏能看到的位置"
+        "它属于 NVIDIA，但本机上没有。运行 nvfku model --fetch 可获取实测稳定版"
+        "（会校验摘要），或自行把副本放到游戏能看到的位置"
     ),
     "a1.missing.model.what": "{name}（{size}，sha256 {sha}...）",
     "a1.missing.model.why": "DLSS 5 神经渲染就是这个 DLL；没有其他东西能替代它",

@@ -110,11 +110,6 @@ API_FOR_DLL = {
 INSTALLED_DLL = "dxgi.dll"
 INSTALLED_INI = "ReShade.ini"
 
-#: Proton prefixes need a few variables to behave outside Steam. Measured against
-#: `proton-cachyos`; GE-Proton and Valve Proton accept the same set.
-PROTON_ENV_PREFIX = "steamapps/compatdata"
-
-
 class ReshadeError(RuntimeError):
     """ReShade could not be installed. Never silent: always carries a reason."""
 
@@ -541,53 +536,6 @@ def _prefix_env(runtime: ProtonRuntime, paths: Paths) -> dict[str, str]:
     env.setdefault("STEAM_COMPAT_INSTALL_PATH", str(runtime.root))
     return env
 
-
-def ensure_prefix(
-    runtime: ProtonRuntime,
-    paths: Paths,
-    *,
-    logger=print,
-    timeout: int = 900,
-    language: str | None = None,
-) -> None:
-    """Create the Proton prefix if the game has never been launched.
-
-    Running ``proton run`` with a literal command is the documented way to make
-    Proton build a prefix without Steam. `wineboot` is not enough: the prefix
-    also needs Proton's registry patches and its .NET, which this exercises.
-
-    Measured: a fresh data directory produced
-    ``Proton: Upgrading prefix from None to CachyOS-11.0-100`` and a working
-    prefix that ran a Windows program.
-    """
-    if not runtime.needs_prefix_init:
-        logger("  " + text(language, "rh.log.prefix_ready", prefix=runtime.prefix))
-        return
-
-    runtime.data_dir.mkdir(parents=True, exist_ok=True)
-    logger("  " + text(language, "rh.log.prefix_creating", tool=runtime.name))
-    runtime.prefix.mkdir(parents=True, exist_ok=True)
-    # A short-lived command so Proton sets the prefix up and exits. `cmd /c exit`
-    # needs no display and no console, unlike most Windows programs.
-    result = subprocess.run(
-        ["python3", str(runtime.proton_script), "run", "cmd", "/c", "exit"],
-        env=_prefix_env(runtime, paths),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    if result.returncode != 0 or not (runtime.prefix / "drive_c").is_dir():
-        detail = (result.stdout + result.stderr).strip().splitlines()
-        tail = (
-            " | ".join(detail[-4:])
-            if detail
-            else text(language, "rh.error.prefix_exit", code=result.returncode)
-        )
-        raise ReshadeError(
-            text(language, "rh.error.prefix_create_failed", detail=tail)
-        )
-    runtime.needs_prefix_init = False
-    logger("  " + text(language, "rh.log.prefix_created", prefix=runtime.prefix))
 
 
 def windows_path(target: Path) -> str:

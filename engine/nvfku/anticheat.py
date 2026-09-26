@@ -72,5 +72,3 @@ def detect_anticheat(game: Game, *, max_entries: int = 3000) -> list[str]:
     return sorted(found)
 
 
-def is_online_risk(game: Game) -> bool:
-    return bool(detect_anticheat(game))

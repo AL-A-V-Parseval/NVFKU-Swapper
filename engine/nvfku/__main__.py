@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, mirror, providers, steam, weights
-from .paths import Paths, human_size
+from .paths import Paths, human_size, sha256_file
 from .journal import list_journals, rollback_journal
 
 
@@ -1028,7 +1028,7 @@ def cmd_model(args) -> int:
         if not target.is_file():
             print(f"no such file: {target}", file=sys.stderr)
             return 1
-        digest = weights._digest(target)
+        digest = sha256_file(target)
         build = weights.identify(digest)
         info = {
             "path": str(target),

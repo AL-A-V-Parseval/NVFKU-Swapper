@@ -48,14 +48,11 @@ STEAM_CLIENT_SUFFIXES = (
     "steam.sh",
 )
 
-# `apps` section, then an appid block, then LaunchOptions. Indentation in this
-# file is tabs only: 5 for an app key, 6 for its children, and two tabs between
-# a key and its value. Measured, not guessed.
-_KEY_RE = re.compile(r'^(\t*)"([^"]+)"\s*$')
-
-
 def parse_vdf_line(line: str) -> tuple[str, str, str | None] | None:
     """``(indent, key, value)`` for a key/value line, ``value=None`` for a block.
+
+    Indentation in this dialect is tabs only: 5 for an app key, 6 for its children,
+    and two tabs between a key and its value. Measured, not guessed.
 
     Written as a small scanner rather than a regular expression because a VDF
     value may contain an escaped quote: the lexical shape is the same as
@@ -201,19 +198,6 @@ def escape_vdf(value: str) -> str:
     """Escape a value for a quoted VDF string."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
-
-def unescape_vdf(value: str) -> str:
-    out: list[str] = []
-    index = 0
-    while index < len(value):
-        char = value[index]
-        if char == "\\" and index + 1 < len(value):
-            out.append(value[index + 1])
-            index += 2
-            continue
-        out.append(char)
-        index += 1
-    return "".join(out)
 
 
 def _find_apps_section(text: str) -> tuple[int, int]:

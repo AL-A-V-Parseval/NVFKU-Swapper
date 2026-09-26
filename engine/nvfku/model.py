@@ -1,9 +1,11 @@
 """Locating and classifying the proprietary DLSS NR model.
 
-``nvngx_dlssnr.dll`` is NVIDIA's, is roughly 158 MiB, and is never downloaded or
-redistributed by this tool.  Every route that runs neural rendering needs it
-beside the game executable, so the discovery and verification logic lives here
-once instead of being reimplemented per route.
+``nvngx_dlssnr.dll`` is NVIDIA's and is roughly 158 MiB.  This module only *finds
+and classifies* it.  ``weights.py`` is where the pinned, digest-verified download
+lives and ``nvfku model --fetch`` is how a user reaches it — this file no longer
+claims otherwise.  Every route that runs neural rendering needs the model beside
+the game executable, so the discovery logic lives here once instead of being
+reimplemented per route.
 
 Two lessons are baked into this file, both from measuring the real machine:
 

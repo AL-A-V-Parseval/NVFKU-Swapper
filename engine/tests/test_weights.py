@@ -278,29 +278,6 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(leftovers, [], f"partial files left: {leftovers}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-def _table_slice(source: str, language: str) -> dict[str, str]:
-    """The `key: value` pairs of one language table in `l10n.dart`.
-
-    A small parser rather than a search over the whole file, because the two tables
-    sit side by side by design and a file-wide search cannot tell which language a
-    string came from -- which is exactly the mistake this is here to catch.
-    """
-    import re
-
-    marker = "englishStrings" if language == "en" else "chineseStrings"
-    start = source.index(marker)
-    end = source.index("\n};", start)
-    body = source[start:end]
-
-    out: dict[str, str] = {}
-    for match in re.finditer(r"'([\w.]+)':\s*((?:'(?:[^'\\]|\\.)*'\s*)+)", body):
-        parts = re.findall(r"'((?:[^'\\]|\\.)*)'", match.group(2))
-        out[match.group(1)] = "".join(parts)
-    return out
 
 
 class DocumentationTest(unittest.TestCase):

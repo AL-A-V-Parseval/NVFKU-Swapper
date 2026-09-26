@@ -27,7 +27,7 @@ import subprocess
 import urllib.error
 import urllib.request
 import dataclasses
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .paths import Paths, atomic_write_text, human_size, sha256_file
@@ -47,8 +47,6 @@ class Component:
     license: str | None = None
     homepage: str | None = None
     notes: str | None = None
-    assets: dict[str, str] = field(default_factory=dict)
-    """Extra assets of the same release, by name."""
 
     def local_path(self, paths: Paths) -> Path:
         cache = paths.download_cache() / self.id
@@ -731,25 +729,6 @@ def verify_against_shasums(path: Path, sums: dict[str, str], *, logger=print) ->
         return True, f"{path.name} matches the upstream SHA-256"
     return False, f"{path.name} does NOT match upstream: got {actual}, expected {expected}"
 
-
-def list_release_assets(repo: str, *, limit: int = 3) -> list[dict]:
-    releases = http_json(f"{GITHUB_API}/{repo}/releases?per_page={limit}")
-    if isinstance(releases, dict):
-        return []
-    out: list[dict] = []
-    for release in releases:
-        for asset in release.get("assets", []):
-            out.append(
-                {
-                    "tag": release["tag_name"],
-                    "prerelease": bool(release.get("prerelease")),
-                    "name": asset["name"],
-                    "size": asset["size"],
-                    "url": asset["browser_download_url"],
-                    "published_at": release.get("published_at"),
-                }
-            )
-    return out
 
 
 # ------------------------------------------------------------- route state

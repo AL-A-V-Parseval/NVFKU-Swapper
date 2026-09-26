@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import weights
-from .paths import Paths, human_size
+from .paths import Paths, human_size, sha256_file
 
 #: ``<project_root>/vendor/weights``.
 #:
@@ -121,7 +121,7 @@ def inspect(vendor_dir: Path | None = None) -> MirrorState:
         )
 
     try:
-        digest = weights._digest(target)
+        digest = sha256_file(target)
     except OSError:
         # It is on disk but cannot be read, which is *not* the same as absent: the
         # UI should say the file is there and unverified rather than offer to
@@ -217,7 +217,7 @@ def sync(
     # here. On disagreement the destination is deleted rather than left looking
     # like a mirror somebody could install from.
     try:
-        digest = weights._digest(target)
+        digest = sha256_file(target)
     except OSError as exc:
         target.unlink(missing_ok=True)
         raise weights.WeightsError(

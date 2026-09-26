@@ -84,8 +84,8 @@ EN: dict[str, str] = {
         "crashes after a few minutes"
     ),
     "a2.fix.nr_model_missing": (
-        "NVIDIA's file, never downloaded by this tool; place a copy beside the "
-        "executable"
+        "NVIDIA's file, and not on this machine. Run 'nvfku model --fetch' for the "
+        "tested build (digest-checked), or place a copy beside the executable"
     ),
     "a2.fix.anticheat": "an injected upscaler in an anti-cheat game risks the account",
     # Missing-component guidance (the model is a proprietary NVIDIA file)
@@ -181,7 +181,10 @@ ZH: dict[str, str] = {
     "a2.fix.nr_model_untested": (
         "实测稳定的 build 是 {digest}...；如果游戏运行几分钟后崩溃，请查看游戏日志"
     ),
-    "a2.fix.nr_model_missing": "这是 NVIDIA 的文件，本工具不会下载；请自行放一份到可执行文件旁",
+    "a2.fix.nr_model_missing": (
+        "这是 NVIDIA 的文件，但本机上没有。运行 nvfku model --fetch 可获取实测稳定版"
+        "（会校验摘要），或自行放一份到可执行文件旁"
+    ),
     "a2.fix.anticheat": "在反作弊游戏中使用注入式超分器有封号风险",
     "a2.missing.model.why": "DLSS-NR pass 用的就是这个模型；OptiScaler 只负责驱动它",
     "a2.missing.model.how": "从启用了 DLSS 5 的游戏复制，或从 Magpie 完整包中复制",

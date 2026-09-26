@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .paths import Paths, atomic_write_text, human_size, iter_files
+from .paths import Paths, atomic_write_text, iter_files
 from .pe import PEFile, read_pe
 
 # --------------------------------------------------------------- VDF parsing
@@ -878,11 +878,3 @@ def _game_from_cache(data: dict) -> Game | None:
         return None
 
 
-def format_game_line(game: Game) -> str:
-    api = game.rendering_api or "unknown API"
-    bits = f"{game.bitness}-bit" if game.bitness else "?-bit"
-    dlss = "DLSS" if game.native_dlss else "no DLSS"
-    nr = " + NR model" if game.nvngx_dlssnr else ""
-    proton = game.proton_tool or "no prefix"
-    size = human_size(game.size_on_disk) if game.size_on_disk else "-"
-    return f"{game.appid:>8}  {game.name[:42]:<42} {api:<11} {bits:<8} {dlss}{nr:<12} {proton:<20} {size}"

@@ -32,62 +32,22 @@ from typing import Iterable, Iterator
 _CHUNK = 1024 * 1024
 
 
-def sha256_file(path: os.PathLike[str] | str, *, limit: int | None = None) -> str:
+def sha256_file(path: os.PathLike[str] | str) -> str:
     """SHA-256 of a file, read in chunks.
 
-    ``limit`` hashes only the first N bytes, which is what
-    :func:`looks_like_lfs_pointer` needs and what a cheap "did this file change
-    at all" check wants.
+    Chunked because the files this hashes include the 158 MiB DLSS NR model, and
+    the model is hashed on several code paths.
     """
     digest = hashlib.sha256()
-    remaining = limit
     with open(path, "rb") as handle:
         while True:
-            want = _CHUNK if remaining is None else min(_CHUNK, remaining)
-            if want <= 0:
-                break
-            block = handle.read(want)
+            block = handle.read(_CHUNK)
             if not block:
                 break
             digest.update(block)
-            if remaining is not None:
-                remaining -= len(block)
     return digest.hexdigest()
 
 
-def looks_like_lfs_pointer(path: os.PathLike[str] | str) -> bool:
-    """True for a Git-LFS pointer file rather than the binary it stands for.
-
-    The ComfyUI Linux PR calls this out explicitly: LFS placeholders have to be
-    detected *before* launch, or you get a confusing runtime failure much
-    later.  We apply the same check to every downloaded binary.
-    """
-    try:
-        if os.path.getsize(path) > 1024:
-            return False
-        with open(path, "rb") as handle:
-            head = handle.read(64)
-    except OSError:
-        return False
-    return head.startswith(b"version https://git-lfs.github.com/spec")
-
-
-def file_fingerprint(path: os.PathLike[str] | str) -> dict:
-    """Size, SHA-256 and symlink status, or ``{"exists": False}``."""
-    path = Path(path)
-    if not path.exists() and not path.is_symlink():
-        return {"exists": False}
-    info: dict = {"exists": True, "symlink": path.is_symlink()}
-    if path.is_symlink():
-        info["target"] = os.readlink(path)
-    try:
-        st = path.stat()
-        info["size"] = st.st_size
-        info["readable"] = os.access(path, os.R_OK)
-        info["lfs_pointer"] = looks_like_lfs_pointer(path)
-    except OSError as exc:
-        info["error"] = str(exc)
-    return info
 
 
 @dataclass(frozen=True)
@@ -126,9 +86,10 @@ class Paths:
             (path for path in candidates if (path / "steamapps").is_dir()), None
         )
 
-        # Mounted Windows volumes are the most likely place to find the
-        # proprietary files we may never redistribute (nvngx_dlssnr.dll and
-        # friends).  We only *report* them; nothing is copied automatically.
+        # Mounted Windows volumes are a good place to find the proprietary model
+        # (nvngx_dlssnr.dll): a game the user already owns often ships one, and that
+        # copy needs no download.  Searching is not copying — a route's install is
+        # what puts a chosen build beside the game, after the user confirms it.
         mounts = []
         media = Path("/run/media") / home_path.name
         if media.is_dir():
@@ -215,27 +176,6 @@ class Paths:
 
 # --------------------------------------------------------------------- copies
 
-
-def atomic_copy(src: os.PathLike[str] | str, dest: os.PathLike[str] | str) -> None:
-    """Copy ``src`` over ``dest`` without ever writing through a symlink.
-
-    If ``dest`` is a symlink it is replaced by a regular file (``replace_symlink``
-    semantics), matching what the Linux DLSS setups require inside a Proton
-    prefix.
-    """
-    src, dest = Path(src), Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.is_symlink():
-        dest.unlink()
-    fd, tmp_name = tempfile.mkstemp(prefix=".nvfku-", dir=str(dest.parent))
-    os.close(fd)
-    tmp = Path(tmp_name)
-    try:
-        shutil.copy2(src, tmp)
-        os.replace(tmp, dest)
-    finally:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
 
 
 def atomic_write_text(

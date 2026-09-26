@@ -13,8 +13,12 @@ On-disk layout::
         <game-key>/
             <journal-id>/
                 manifest.json
-                files/0000-original.dll  # pre-image of a replaced file
-                created/0001-new.dll     # a file we created (for reference)
+                files/files/0000-original.dll   # a pre-image
+
+The doubled `files/` is real, not a typo here: `_next_name` appends its tag to
+`_files_dir`, and every caller passes the tag "files". That is the layout on disk
+today and rollback reads it by path, so it is documented rather than changed. A
+`created/` tree was described in this docstring for a while and never existed.
 
 A journal is append-only while a route runs.  ``rollback()`` replays it
 backwards: creations are deleted, replacements are restored from the pre-image.
@@ -135,7 +139,6 @@ class FileJournal:
         self.journal_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         self.dir = paths.backups_root() / self.game_key / self.journal_id
         self._files_dir = self.dir / "files"
-        self._created_dir = self.dir / "created"
         self._journal = Journal(
             id=self.journal_id,
             game_key=self.game_key,
@@ -553,7 +556,6 @@ def rollback_journal(paths: Paths, journal_id: str) -> list[str]:
     handle.journal_id = journal.id
     handle.dir = journal_dir(paths, journal)
     handle._files_dir = handle.dir / "files"
-    handle._created_dir = handle.dir / "created"
     handle._journal = journal
     handle._counter = len(journal.operations)
     return handle.rollback()

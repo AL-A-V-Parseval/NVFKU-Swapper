@@ -32,13 +32,10 @@ _PE_OFFSET = 0x3C
 @dataclass
 class PEFile:
     path: Path
-    machine: int
     bitness: int
     imports: list[str] = field(default_factory=list)
     delay_imports: list[str] = field(default_factory=list)
-    exports: list[str] = field(default_factory=list)
     strings: list[str] = field(default_factory=list)
-    sections: list[str] = field(default_factory=list)
     is_dll: bool = False
 
     @property
@@ -52,19 +49,6 @@ class PEFile:
     def has_string(self, needle: str) -> bool:
         needle = needle.lower()
         return any(needle in s.lower() for s in self.strings)
-
-    def has_import(self, needle: str) -> bool:
-        needle = needle.lower()
-        return any(needle in name for name in self.imports + self.delay_imports)
-
-    def summary(self) -> dict:
-        return {
-            "path": str(self.path),
-            "bitness": self.bitness,
-            "is_dll": self.is_dll,
-            "import_dlls": self.import_dlls,
-            "delay_import_dlls": sorted({n.lower() for n in self.delay_imports}),
-        }
 
 
 def _cstring(blob: bytes, offset: int, limit: int = 512) -> str:
@@ -127,27 +111,25 @@ def read_pe(path: str | Path) -> PEFile | None:
 
     section_off = opt_off + opt_size
     sections: list[tuple[int, int, int, int]] = []
-    section_names: list[str] = []
     for index in range(n_sections):
         base = section_off + index * 40
         if base + 40 > len(blob):
             break
-        name = _cstring(blob, base, 8)
         vsize, va, raw_size, raw = struct.unpack_from("<IIII", blob, base + 8)
         sections.append((va, vsize, raw, raw_size))
-        section_names.append(name)
 
     pe = PEFile(
         path=path,
-        machine=machine,
         bitness=bitness,
         is_dll=bool(characteristics & 0x2000),
-        sections=section_names,
     )
 
+    # No export-table pass. It fed a field nothing read, and parsing it walked a
+    # structure on every `read_pe` — which the library scan calls once per candidate
+    # executable. The import and delay-import passes are read by `import_dlls` and
+    # `has_string`, so they stay.
     pe.imports = _read_import_names(blob, directories[1][0], sections)
     pe.delay_imports = _read_delay_import_names(blob, directories[13][0], sections)
-    pe.exports = _read_export_names(blob, directories[0][0], sections, bitness)
     pe.strings = _scan_strings(blob, sections)
     return pe
 
@@ -200,39 +182,6 @@ def _read_delay_import_names(
                 names.append(_cstring(blob, offset))
         cursor += 32
     return names
-
-
-def _read_export_names(
-    blob: bytes, rva: int, sections: list[tuple[int, int, int, int]], bitness: int
-) -> list[str]:
-    """Exported *symbol* names.
-
-    We do not resolve addresses; we only want to know whether an executable
-    exports NGX entry points itself, which happens for games that statically
-    link the NGX SDK.
-    """
-    if not rva:
-        return []
-    base = _rva_to_offset(rva, sections)
-    if base is None or base + 40 > len(blob):
-        return []
-    try:
-        _, _, _, name_count, _, names_rva = struct.unpack_from("<IIIIII", blob, base + 16)
-    except struct.error:
-        return []
-    names_off = _rva_to_offset(names_rva, sections)
-    if names_off is None:
-        return []
-    out: list[str] = []
-    for index in range(min(name_count, 4096)):
-        try:
-            sym_rva = struct.unpack_from("<I", blob, names_off + index * 4)[0]
-        except struct.error:
-            break
-        offset = _rva_to_offset(sym_rva, sections)
-        if offset is not None:
-            out.append(_cstring(blob, offset))
-    return out
 
 
 # Strings an import table cannot express.  A game using the D3D12 Agility SDK

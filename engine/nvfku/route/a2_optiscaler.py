@@ -407,15 +407,6 @@ def render_ini(existing: str | None, *, working_scale: int = 100) -> str:
 
 # ------------------------------------------------------------------ install
 
-# Names OptiScaler ships its proxy DLLs under, best first.  The archive is laid
-# out by API, so the D3D12 folder is what a DX12 game wants.
-_PROXY_SOURCE_PATTERNS = (
-    r"OptiScaler\.dll$",
-    r"dxgi\.dll$",
-    r"winmm\.dll$",
-)
-
-
 PROXY_PAYLOAD_NAMES = ("optiscaler.dll", "optiscaler_x64.dll", "optiscaler_amd.dll")
 PROXY_PREFAB_NAMES = {"dxgi.dll", "winmm.dll", "d3d11.dll", "d3d12.dll", "version.dll", "dinput8.dll"}
 
