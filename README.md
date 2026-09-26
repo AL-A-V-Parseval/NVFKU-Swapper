@@ -42,6 +42,7 @@ engine/                 pure-Python, stdlib only, no GUI dependency
   tests/                232 tests, stdlib unittest
 app/                    Flutter UI (Flutter SDK only, no third-party packages)
 tools/env.sh            isolation: project venv + pinned SDK + local pub cache
+tools/install_desktop.py  a menu entry for a checkout, in the user XDG dirs
 ```
 
 ## Isolation
@@ -66,6 +67,21 @@ Everything lives in one of three places, all outside the repository tree:
 | engine state | `~/.local/share/nvfku` | journals, backups, component cache |
 
 `tools/env.sh` picks up the local CMake automatically when the system has none.
+
+To put the app in the desktop application menu without installing anything
+system-wide:
+
+```sh
+python3 tools/install_desktop.py            # writes into ~/.local/share
+python3 tools/install_desktop.py --check    # report, change nothing
+python3 tools/install_desktop.py --uninstall
+```
+
+The `.deb` ships its own menu entry, but that one points at `/usr/bin/nvfku-swapper`;
+a checkout needs its own, and this writes it plus the icon into the *user* XDG
+directories, so it needs no root and is undone by `--uninstall`. Re-run it after
+moving the checkout — the `Exec` line holds an absolute path, and a stale one gives
+you a menu entry that silently does nothing.
 
 ## Usage
 

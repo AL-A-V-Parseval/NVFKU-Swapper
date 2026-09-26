@@ -41,6 +41,7 @@ engine/                 纯 Python，只用标准库，不依赖 GUI
   tests/                232 项测试，标准库 unittest
 app/                    Flutter 界面（只用 Flutter SDK，无第三方包）
 tools/env.sh            隔离：项目 venv + 钉定的 SDK + 本地 pub 缓存
+tools/install_desktop.py  为源码目录创建菜单入口，写入用户级 XDG 目录
 ```
 
 ## 隔离
@@ -64,6 +65,19 @@ flutter build linux        # 界面
 | 引擎状态 | `~/.local/share/nvfku` | 日志、备份、组件缓存 |
 
 系统里没有 CMake 时，`tools/env.sh` 会自动启用本地那份。
+
+想把应用加进桌面菜单、但不想往系统里装任何东西：
+
+```sh
+python3 tools/install_desktop.py            # 只写入 ~/.local/share
+python3 tools/install_desktop.py --check    # 只报告，不改动
+python3 tools/install_desktop.py --uninstall
+```
+
+`.deb` 自带菜单入口，但那个指向 `/usr/bin/nvfku-swapper`；源码目录需要自己的，
+这个脚本会把入口和图标写进**用户级** XDG 目录，所以不需要 root，`--uninstall`
+即可撤销。**移动目录后要重跑**——`Exec` 行里是绝对路径，路径失效后菜单项会
+静默地什么都不做。
 
 ## 用法
 
