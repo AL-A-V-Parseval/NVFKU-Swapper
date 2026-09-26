@@ -17,8 +17,6 @@ dependencies:
   # Material widget throw at build time.
   flutter_localizations:
     sdk: flutter
-  liquid_glass_widgets: ^1.7.2
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
