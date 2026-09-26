@@ -344,7 +344,7 @@ class DocumentationTest(unittest.TestCase):
         not NVIDIA's own download, which is the minimum for the file to be
         accountable after the fact.
         """
-        script = (self.root / "tools/make_release.py").read_text(encoding="utf-8")
+        script = (self.root / "tools/package.py").read_text(encoding="utf-8")
         self.assertIn("model_source_note", script)
         self.assertIn("community mirror", script.lower())
 

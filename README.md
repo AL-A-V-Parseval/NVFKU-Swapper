@@ -1,5 +1,7 @@
 # NVFKU-Swapper
 
+**English** · [简体中文](README.zh.md)
+
 A Linux-native installer for community DLSS 5 routes, in the spirit of
 [DLSS5-Swapper](https://github.com/rakanki911/DLSS5-Swapper) but built around
 one fact that tool does not have to deal with:
@@ -18,7 +20,7 @@ constraints:
 | Driver-dispatched NGX feature 18 fails under Proton (`FAIL_OutOfDate`) | the neural consumer must drive the feature directly from a DLL |
 | Drivers 32.0.16.1664 / 1686 route feature 18 into a snippet that faults | pinning and reporting matter more than "latest" |
 | On Linux ReShade's proxy descriptors must be left native (`unwrap=0`), the opposite of the Windows default | the bridge config is where a naive port crashes |
-| Game directories on a dual-boot machine hold the proprietary model, not the internet | the model is discovered and verified, never downloaded |
+| Game directories on a dual-boot machine often already hold the proprietary model | it is discovered and classified by digest first, and downloaded only when nothing usable is present |
 
 ## Layout
 
@@ -37,8 +39,8 @@ engine/                 pure-Python, stdlib only, no GUI dependency
       a1_bridge.py      ReShade + dlss5-bridge + addon-dlssnr-linux
       a2_optiscaler.py  OptiScaler DLSS-NR via DLL proxy
     __main__.py         CLI
-  tests/                27 tests, stdlib unittest
-app/                    Flutter UI (next)
+  tests/                232 tests, stdlib unittest
+app/                    Flutter UI (Flutter SDK only, no third-party packages)
 tools/env.sh            isolation: project venv + pinned SDK + local pub cache
 ```
 
@@ -69,13 +71,18 @@ Everything lives in one of three places, all outside the repository tree:
 
 ```sh
 python -m nvfku scan                        # what is installed and what each game supports
-python -m nvfku scan --routable --verbose   # only games a route can serve, with evidence
+python -m nvfku scan --routable             # only games a route can serve
 python -m nvfku show 1091500                # one game, with per-route viability
 python -m nvfku plan 1091500 a1             # dry-run: exactly what would change
 python -m nvfku install 1091500 a1 --yes    # apply it (a journal is written first)
 python -m nvfku providers --resolve         # component versions and hashes
 python -m nvfku backups                     # every journal ever written
 python -m nvfku rollback <journal-id>       # undo one, exactly
+
+python -m nvfku model --list                # every known build of the model, by digest
+python -m nvfku model --verify <path>       # what a DLL on this machine actually is
+python -m nvfku model --fetch               # download the tested build, digest-checked
+python -m nvfku model --mirror-sync         # keep a verified copy inside the project
 
 python -m nvfku launch-options 1091500                      # show what Steam has now
 python -m nvfku launch-options 1091500 --route a1 --dry-run  # what A1 would write
@@ -129,11 +136,20 @@ timeout.
 
 ## Routes
 
+There are **two** routes. They are named for what they do rather than for an
+internal code, because the codes leaked into the UI and made a two-way choice read
+as three.
+
 | | Route | Attaches via | Needs | Writes |
 | --- | --- | --- | --- | --- |
-| **A1** | ReShade + dlss5-bridge + addon-dlssnr-linux | local `dxgi.dll` and ReShade add-ons | D3D11/D3D12, 64-bit, Proton, the NR model | yes (journalled) |
-| **A2** | OptiScaler DLSS-NR | local proxy DLL (`dxgi.dll`) | D3D11/D3D12, 64-bit, game must already use DLSS | yes (journalled) |
-| **ReShade** | ReShade 6.8.0 add-on build (DXGI proxy) | `dxgi.dll` + `ReShade.ini` | D3D11/D3D12, 64-bit, a Proton build | yes (journalled) |
+| **ReShade overlay** | ReShade + dlss5-bridge + addon-dlssnr-linux | local `dxgi.dll` and ReShade add-ons | D3D11/D3D12, 64-bit, Proton, the NR model, **and its ReShade prerequisite** | yes (journalled) |
+| **OptiScaler direct** | OptiScaler DLSS-NR | local proxy DLL (`dxgi.dll`) | D3D11/D3D12, 64-bit, game must already use DLSS | yes (journalled) |
+
+ReShade is **not** a third route. It is a component the overlay route needs, so it
+is planned as a nested prerequisite of that route and keeps its own install action
+(and its own `nvfku reshade` command) without appearing in the route list as a
+sibling. Presenting it alongside made the plan read as three options when there are
+two.
 
 A Vulkan-layer route is deliberately absent; see the constraint at the top. There
 is no OpenDLSS-NR probe either: it only ever reported what a native port would
@@ -142,8 +158,8 @@ it occupies.
 
 ## Status
 
-**41 tests, all passing.** Working and verified against the real Steam library on
-the development machine (20 games, 13.7 s, 9 runtimes filtered out):
+**232 tests, all passing.** Working and verified against the real Steam library on
+the development machine (20 games, 9 runtimes filtered out):
 
 - Steam discovery across multiple libraries, Proton prefix and tool resolution
   (`CachyOS-10.1000-200` vs `11.0-100` are distinguished, and the launch options
@@ -203,15 +219,24 @@ in step with a package release.
 
 ```
 app/lib/
-  main.dart            entry point
-  src/design.dart      type scale, status colours, motion constants
-  src/models.dart      the engine's JSON contract as value types
-  src/engine.dart      the subprocess boundary (scan/plan/install/rollback)
-  src/app.dart         the shell: library and game views, one status bar
-  src/views.dart       Library, Game, route rows
-  src/install_panel.dart  plan, apply, live progress, undo
-  src/widgets.dart     HoldButton, CheckRow, ActionRow, MissingCard, StatusBar
-docs/ui-design.md      the design decisions, before the widgets
+  main.dart              entry point
+  src/design.dart        type scale, colours, motion constants
+  src/models.dart        the engine's JSON contract as value types
+  src/engine.dart        the subprocess boundary (scan/plan/install/rollback)
+  src/l10n.dart          English and Chinese, one map each, side by side
+  src/app.dart           the shell: sidebar, status bar, view switching
+  src/games_view.dart    the library as poster cards, with a context menu
+  src/game_sheet.dart    the modal sheet a card opens
+  src/game_detail.dart   facts, routes, plan, install, undo
+  src/home_view.dart     drop a folder, recent games, the activity log
+  src/addons_view.dart   component versions and hashes
+  src/history_view.dart  every journal, with exact rollback
+  src/settings_view.dart persisted settings
+  src/about_view.dart    what it is, and what it will not do
+  src/launch_options.dart  the guarded Steam launch-option panel
+  src/cover.dart         Steam cover art, with an initials placeholder
+  src/widgets.dart       HoldButton, Disclosure, Notice, StatusPill, FieldRow
+docs/ui-design.md        the design decisions, before the widgets
 ```
 
 The design follows `docs/ui-design.md`, which applies Emil Kowalski's
@@ -258,7 +283,7 @@ lists them in full; the short version:
 It has no official download: the DLSS SDK ships headers and an import library only,
 and the Linux driver carries no NR model at all. So a release archives it rather than
 leaving every user to find 158 MiB by hand — with the digest recorded in
-`RELEASE.json` and checked by `tools/make_release.py` before packaging. The full
+`RELEASE.json` and checked by `tools/package.py` before packaging. The full
 reasoning, and the alternatives, are in [docs/weights.md](docs/weights.md).
 
 The GPL-3.0 components are **separate programs**, fetched from their own release pages
@@ -315,6 +340,7 @@ installable on this machine. A `.deb` is an `ar` archive of `debian-binary`,
 The AppImage puts the same payload under `usr/lib/nvfku` inside its AppDir, and the
 tarball puts it at its root; all three use the same launcher, which resolves its own
 directory so the tree can live anywhere.
-[docs/weights.md](docs/weights.md) for the full provenance and
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for how that squares with this
-project's own licence.
+
+The `.deb` carries a `model_source_url` and `model_source_note` in its
+`RELEASE.json` too, so an unpacked archive still says where the model came from and
+what that source is.

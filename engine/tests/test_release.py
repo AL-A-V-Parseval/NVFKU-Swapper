@@ -1,6 +1,6 @@
 """The release packager, and the one thing it must never get wrong.
 
-Everything in `tools/make_release.py` is copying except the model check. The model
+Everything in `tools/package.py` is copying except the model check. The model
 is 158 MiB of NVIDIA's proprietary binary with no official download, and the wrong
 build does not fail cleanly: it reports success on every evaluate and then crashes
 the game minutes into play. A user cannot diagnose that from a bug report, and a
@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_packager():
-    """Import `tools/make_release.py`, which is a script rather than a module."""
-    path = ROOT / "tools/make_release.py"
-    spec = importlib.util.spec_from_file_location("make_release", path)
+    """Import `tools/package.py`, which is a script rather than a module."""
+    path = ROOT / "tools/package.py"
+    spec = importlib.util.spec_from_file_location("package", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -45,13 +45,13 @@ class ModelVerificationTest(unittest.TestCase):
     def test_a_matching_model_is_accepted(self) -> None:
         path, digest, size = self._model(b"M" * 4096)
         self.assertEqual(
-            self.packager.verify_model(digest, size, model=path), path
+            self.packager.verify_model(digest, size, path=path), path
         )
 
     def test_a_missing_model_refuses_and_says_how_to_get_one(self) -> None:
         """The message has to be actionable: this is the first thing a builder hits."""
         with self.assertRaises(SystemExit) as ctx:
-            self.packager.verify_model("a" * 64, 4096, model=self.root / "absent.dll")
+            self.packager.verify_model("a" * 64, 4096, path=self.root / "absent.dll")
         message = str(ctx.exception)
         self.assertIn("no vendored model", message)
         self.assertIn("mirror-sync", message, "it names the command that fixes it")
@@ -60,7 +60,7 @@ class ModelVerificationTest(unittest.TestCase):
         """Sizes first: it is free, and a truncated file is the common failure."""
         path, digest, _ = self._model(b"M" * 4096)
         with self.assertRaises(SystemExit) as ctx:
-            self.packager.verify_model(digest, 999_999, model=path)
+            self.packager.verify_model(digest, 999_999, path=path)
         self.assertIn("bytes, expected", str(ctx.exception))
 
     def test_a_substituted_model_is_refused(self) -> None:
@@ -71,7 +71,7 @@ class ModelVerificationTest(unittest.TestCase):
         """
         path, _, size = self._model(b"X" * 4096)
         with self.assertRaises(SystemExit) as ctx:
-            self.packager.verify_model("b" * 64, size, model=path)
+            self.packager.verify_model("b" * 64, size, path=path)
         message = str(ctx.exception)
         self.assertIn("does not match the digest", message)
         self.assertIn("crash games", message, "it states the consequence")
@@ -90,13 +90,14 @@ class ModelVerificationTest(unittest.TestCase):
 
 
 class LauncherTest(unittest.TestCase):
-    """The launcher must find its engine from wherever it is unpacked."""
+    """The launchers must find their payload from wherever the tree is unpacked."""
 
     def setUp(self) -> None:
         self.packager = _load_packager()
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
+        self.packager.write_launchers(self.root)
 
     def test_the_cli_launcher_runs_the_module_not_a_file(self) -> None:
         """`python3 model --verify x` is read as "run the file `model`".
@@ -105,20 +106,27 @@ class LauncherTest(unittest.TestCase):
         dropped, so every subcommand failed with a confusing message about a
         missing file named after the subcommand.
         """
-        target = self.root / "nvfku"
-        self.packager.write_launcher(target, "test launcher")
-        text = target.read_text(encoding="utf-8")
+        text = (self.root / "nvfku-cli").read_text(encoding="utf-8")
         self.assertIn("python3 -m nvfku", text)
         self.assertIn('"$@"', text)
         self.assertIn("HERE=", text, "it resolves its own directory")
-        self.assertTrue(target.stat().st_mode & 0o111, "it is executable")
 
-    def test_it_uses_a_relative_root_so_the_tree_can_move(self) -> None:
-        target = self.root / "nvfku"
-        self.packager.write_launcher(target, "test launcher")
-        text = target.read_text(encoding="utf-8")
-        self.assertNotIn(str(ROOT), text, "an absolute build path got baked in")
-        self.assertIn('$HERE/engine', text)
+    def test_both_launchers_are_executable(self) -> None:
+        for name in ("nvfku", "nvfku-cli"):
+            path = self.root / name
+            self.assertTrue(path.is_file(), f"{name} was not written")
+            self.assertTrue(path.stat().st_mode & 0o111, f"{name} is not executable")
+
+    def test_the_gui_launcher_points_the_engine_at_its_own_tree(self) -> None:
+        """`NVFKU_ENGINE` must be `$HERE`, or an unpacked release finds no engine."""
+        text = (self.root / "nvfku").read_text(encoding="utf-8")
+        self.assertIn('"$HERE"', text)
+        self.assertIn("app/nvfku_ui", text)
+
+    def test_no_absolute_build_path_is_baked_in(self) -> None:
+        for name in ("nvfku", "nvfku-cli"):
+            text = (self.root / name).read_text(encoding="utf-8")
+            self.assertNotIn(str(ROOT), text, f"{name} hardcodes the build directory")
 
 
 if __name__ == "__main__":

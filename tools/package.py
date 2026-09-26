@@ -76,6 +76,57 @@ def sha256_of(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def engine_constants() -> tuple[str, int, str]:
+    """The digest, size and source URL of the one build this project trusts.
+
+    Read from the engine rather than repeated here, so the packager cannot drift
+    from what the installer considers correct.
+    """
+    from nvfku import weights
+
+    return weights.TESTED_SHA256, weights.TESTED_SIZE, weights.RTX50_SOURCE.url
+
+
+def verify_model(
+    expected_sha: str,
+    expected_size: int,
+    *,
+    path: Path | None = None,
+) -> Path:
+    """The verified model, or a refusal naming exactly what is wrong.
+
+    Takes its path so the refusal branches can be tested without a 158 MiB fixture.
+    This is the one check in this file that is not copying, and it is the reason the
+    file exists: every build of `nvngx_dlssnr.dll` is the same size, so only the
+    digest separates the measured build from one that reports success on every
+    evaluate and then crashes the game minutes into play.
+    """
+    model = path or (VENDOR_WEIGHTS / MANIFEST_NAME)
+    if not model.is_file():
+        raise SystemExit(
+            f"no vendored model at {model}\n"
+            "  Run `python3 -m nvfku model --mirror-sync` first, or drop "
+            "--with-model to package without it."
+        )
+    size = model.stat().st_size
+    if size != expected_size:
+        raise SystemExit(
+            f"the vendored model is {size} bytes, expected {expected_size}\n"
+            f"  {model}\n"
+            "  Delete it and re-run `model --mirror-sync`."
+        )
+    digest = sha256_of(model)
+    if digest != expected_sha:
+        raise SystemExit(
+            "the vendored model does not match the digest this build was tested with\n"
+            f"  expected {expected_sha}\n"
+            f"  got      {digest}\n"
+            f"  {model}\n"
+            "  Packaging refuses rather than shipping a build that will crash games."
+        )
+    return model
+
+
 def ignore_engine(_directory: str, names: list[str]) -> set[str]:
     return {n for n in names if n in {"__pycache__", "tests"} or n.endswith(".pyc")}
 
@@ -137,25 +188,13 @@ def payload_tree(staging: Path, *, with_model: bool) -> None:
         ENGINE / "nvfku", staging / "engine/nvfku", ignore=ignore_engine, dirs_exist_ok=True
     )
     shutil.copytree(APP_BUNDLE, staging / "app", dirs_exist_ok=True)
-    for name in ("README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"):
+    for name in ("README.md", "README.zh.md", "LICENSE", "THIRD_PARTY_NOTICES.md"):
         if (ROOT / name).is_file():
             shutil.copy2(ROOT / name, staging / name)
     if (ROOT / "docs").is_dir():
         shutil.copytree(ROOT / "docs", staging / "docs", dirs_exist_ok=True)
     if with_model:
-        from nvfku import weights
-
-        model = VENDOR_WEIGHTS / MANIFEST_NAME
-        if not model.is_file():
-            raise SystemExit(
-                f"--with-model asked for but {model} is absent; run "
-                "`python3 -m nvfku model --mirror-sync` first"
-            )
-        if sha256_of(model) != weights.TESTED_SHA256:
-            raise SystemExit(
-                "the vendored model does not match the tested digest; refusing to "
-                "package a build that will crash games"
-            )
+        model = verify_model(*engine_constants()[0:2])
         (staging / "vendor/weights").mkdir(parents=True, exist_ok=True)
         shutil.copy2(model, staging / "vendor/weights" / MANIFEST_NAME)
 
@@ -325,7 +364,7 @@ def build_deb(out_dir: Path, *, with_model: bool) -> Path:
             data_entries[
                 "./usr/share/icons/hicolor/256x256/apps/nvfku-swapper.png"
             ] = (icon.read_bytes(), 0o644)
-        for doc in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
+        for doc in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "README.zh.md"):
             source = staging / doc
             if source.is_file():
                 data_entries[f"./usr/share/doc/nvfku-swapper/{doc}"] = (
@@ -402,7 +441,7 @@ def build_deb(out_dir: Path, *, with_model: bool) -> Path:
             )
         doc_dir = data_root / "usr/share/doc/nvfku-swapper"
         doc_dir.mkdir(parents=True, exist_ok=True)
-        for doc in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
+        for doc in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "README.zh.md"):
             source = staging / doc
             if source.is_file():
                 shutil.copy2(source, doc_dir / doc)
@@ -509,6 +548,16 @@ def _release_json(with_model: bool, kind: str) -> str:
                             "See THIRD_PARTY_NOTICES.md and docs/weights.md."
                         ),
                     }
+                ),
+                # Where the model came from, and what that source is. Recorded in
+                # every manifest because a release archive is the thing a user
+                # unpacks, and this is the only place it can be learned after the
+                # fact that the binary inside is a community mirror rather than an
+                # NVIDIA download.
+                "model_source_url": engine_constants()[2],
+                "model_source_note": (
+                    "A community mirror of NVIDIA's signed runtime, not an NVIDIA "
+                    "download. See THIRD_PARTY_NOTICES.md and docs/weights.md."
                 ),
                 "source": HOMEPAGE,
             },
