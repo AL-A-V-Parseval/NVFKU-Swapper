@@ -267,41 +267,54 @@ is compiled into or imported by this project, so their copyleft does not extend 
 this project's code. If that ever changes — if any of their source is incorporated
 rather than invoked — this project's licence has to become GPL-3.0 too.
 
-## Building a release
-
-Two steps, in this order:
+## Packaging
 
 ```bash
-python3 -m nvfku model --mirror-sync    # fetch and verify the model into vendor/
-python3 tools/make_release.py           # build the app, verify the model, package
+flutter build linux --release      # in app/, once
+python3 tools/package.py           # all three formats into dist/
 ```
 
-`make_release.py` **verifies the model before packaging and refuses if it does not
-match**. That check is the reason the script exists: the file is 158 MiB of NVIDIA's
-binary, every build of it is exactly the same size, and the wrong one reports
-success on every evaluate before crashing the game minutes into play. A release that
-ships the wrong build is worse than one that ships none, because nobody can diagnose
-it from a bug report.
+| Format | Size | Model inside? |
+|---|---|---|
+| `.tar.gz` | 9.5 MiB | no |
+| `.deb` | 9.5 MiB | **never** |
+| `.AppImage` | 9.6 MiB | no |
 
-The archive is self-contained — the Flutter bundle, the Python engine (standard
-library only), the verified model, and the docs — and its launchers resolve their own
-directory, so it can be unpacked anywhere:
+Three formats, and a `SHA256SUMS` beside them.
 
-```
-nvfku-swapper/
-  nvfku          command line
-  nvfku-gui      graphical interface
-  engine/nvfku/  the engine
-  app/           the Flutter bundle
-  vendor/weights/nvngx_dlssnr.dll   the model, digest-verified
-  RELEASE.json   what was built, and the digest that was checked
+**None of them contains `nvngx_dlssnr.dll`.** It is 158 MiB, it is NVIDIA's, and
+nothing licenses its redistribution — so a package carrying it would be 119 MiB and
+not distributable. Every format fetches and verifies it on first use instead:
+
+```bash
+nvfku model --mirror-sync
 ```
 
-Useful flags: `--check` verifies the model and exits, `--skip-build` reuses the
-existing app bundle, `--no-app` packages the engine and model only.
+The tool says so at the moment it matters (`RELEASE.json` records it, and the plan
+offers the fetch as an action), rather than failing later with a missing-file error.
 
-`RELEASE.json` records where the model came from and that it is a community mirror of
-NVIDIA's signed runtime rather than an NVIDIA download. See
+`--with-model` bundles it for a private build. It **refuses to combine with
+`--format deb`**, because that is the one combination that causes real trouble: a
+`.deb` carrying a proprietary NVIDIA binary is rejected by every Debian archive.
+
+The `.deb` is assembled by `tools/package.py` directly — no `dpkg-deb`, which is not
+installable on this machine. A `.deb` is an `ar` archive of `debian-binary`,
+`control.tar.gz` and `data.tar.gz`, and all three are formats Python already writes.
+
+### What is in each one
+
+```
+/usr/lib/nvfku/            payload (engine, app bundle, docs)
+/usr/bin/nvfku-swapper     GUI
+/usr/bin/nvfku             CLI
+/usr/share/applications/   desktop entry
+/usr/share/icons/          icon
+/usr/share/doc/nvfku-swapper/
+```
+
+The AppImage puts the same payload under `usr/lib/nvfku` inside its AppDir, and the
+tarball puts it at its root; all three use the same launcher, which resolves its own
+directory so the tree can live anywhere.
 [docs/weights.md](docs/weights.md) for the full provenance and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for how that squares with this
 project's own licence.
