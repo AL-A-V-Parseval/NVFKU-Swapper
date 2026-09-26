@@ -64,6 +64,32 @@ def desktop_file() -> Path:
     return data_home() / "applications" / f"{APP_ID}.desktop"
 
 
+def wrapper_file() -> Path:
+    """Where the menu entry's `Exec` points.
+
+    Not the Flutter binary directly. The engine finds the checkout by walking up from
+    its own executable, and that search failed from this very directory layout once —
+    a menu entry that starts a window and then reports `No module named nvfku` is
+    worse than no entry. `NVFKU_ENGINE` short-circuits the search, and this script is
+    where the caller's intention can be stated unambiguously, because at install time
+    the project root is already known.
+
+    It lives beside the entry rather than in the checkout, so uninstalling leaves no
+    trace in the repository.
+    """
+    return data_home() / APP_ID / "run.sh"
+
+
+def wrapper_text() -> str:
+    return (
+        "#!/bin/sh\n"
+        "# Written by tools/install_desktop.py. Safe to delete; re-run the script to\n"
+        "# regenerate it after moving the checkout.\n"
+        f'export NVFKU_ENGINE="{ROOT}"\n'
+        f'exec "{LAUNCHER}" "$@"\n'
+    )
+
+
 def icon_dir(size: int | None) -> Path:
     if size is None:
         return data_home() / "icons/hicolor/scalable/apps"
@@ -97,9 +123,8 @@ def entry_text() -> str:
     """The `.desktop` contents.
 
     `Path=` is set as well as `Exec=`. It is not required, but it tells the shell
-    what the application's working directory is, which is what makes "open the
-    containing folder" behave and keeps a relative-path bug from starting the app
-    somewhere unexpected.
+    what the application's working directory is, which keeps a relative-path bug from
+    starting the app somewhere unexpected.
     """
     return (
         "[Desktop Entry]\n"
@@ -108,7 +133,7 @@ def entry_text() -> str:
         f"Name=NVFKU-Swapper\n"
         "GenericName=DLSS 5 installer\n"
         "Comment=Install DLSS 5 Neural Rendering into Linux games\n"
-        f"Exec={LAUNCHER}\n"
+        f"Exec={wrapper_file()}\n"
         f"Path={APP_BUNDLE}\n"
         f"Icon={APP_ID}\n"
         "Terminal=false\n"
@@ -155,6 +180,7 @@ def report() -> int:
     present = desktop_file().is_file()
     print(f"  desktop entry: {desktop_file()}")
     print(f"    {'present' if present else 'absent'}")
+    print(f"  wrapper: {wrapper_file()} ({'present' if wrapper_file().is_file() else 'absent'})")
     icons = sorted(p for p in (data_home() / "icons/hicolor").glob("*/apps/nvfku-swapper.*"))
     print(f"  icons: {len(icons)}")
     for icon in icons:
@@ -173,6 +199,17 @@ def report() -> int:
                 _, _, target = line.partition("=")
                 if not Path(target).exists():
                     problems.append(f"{line.split('=')[0]} points at something absent: {target}")
+        # The wrapper is where `NVFKU_ENGINE` is set, so a stale one is the failure
+        # that produces `No module named nvfku` in an otherwise working window.
+        if wrapper_file().is_file():
+            target = re.search(
+                r'NVFKU_ENGINE="([^"]+)"', wrapper_file().read_text(encoding="utf-8")
+            )
+            if target and not Path(target.group(1), "engine/nvfku").is_dir():
+                problems.append(
+                    f"the wrapper points NVFKU_ENGINE at {target.group(1)}, which has no "
+                    "engine/nvfku — re-run this script after moving the checkout"
+                )
     if problems:
         print()
         for problem in problems:
@@ -183,6 +220,15 @@ def report() -> int:
 
 def uninstall() -> int:
     removed = 0
+    if wrapper_file().is_file():
+        wrapper_file().unlink()
+        removed += 1
+        print(f"  removed {wrapper_file().relative_to(data_home())}")
+        try:
+            wrapper_file().parent.rmdir()
+        except OSError:
+            # Not empty: something else lives there, which is not ours to delete.
+            pass
     if desktop_file().is_file():
         desktop_file().unlink()
         removed += 1
@@ -211,6 +257,12 @@ def install() -> int:
             "  (The menu entry points at the built launcher, so writing one before "
             "the build would create an entry that does nothing.)"
         )
+
+    wrapper = wrapper_file()
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(wrapper_text(), encoding="utf-8")
+    wrapper.chmod(0o755)
+    print(f"  wrote {wrapper.relative_to(data_home())}")
 
     desktop_file().parent.mkdir(parents=True, exist_ok=True)
     desktop_file().write_text(entry_text(), encoding="utf-8")
