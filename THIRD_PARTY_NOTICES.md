@@ -83,8 +83,26 @@ downloads (currently `v0.2.2`). Nothing here modifies it.
 
 ## Bundled with the Flutter application
 
-The `app/` bundle in a release archive embeds the Flutter engine and framework, which
-are BSD 3-Clause. Their notices travel with the Flutter SDK —
+### `liquid_glass_widgets` — Sander de Gennaar, and Tim Lehmann
+
+- **Licence:** MIT
+- **Source:** <https://github.com/sdegenaar/liquid_glass_widgets>
+- **Ships:** compiled into the `app/` bundle in every release archive
+- **Derived from:** `liquid_glass_renderer` by Tim Lehmann
+  (<https://github.com/whynotmake-it/flutter_liquid_glass>), also MIT. The package's
+  own `lib/src/engine/ATTRIBUTION.md` records the upstream baseline
+  (`v0.2.0-dev.4`, forked 2026-03-28) and states the vendored files are integrated
+  rather than a snapshot.
+
+This is the only third-party Dart package in the project, and it is the one
+dependency that changed a deliberate design decision: the UI was Flutter-SDK-only
+so that nothing had to be kept in step with a package release. It buys the glass
+material the interface is built on, and it is compiled in, so its notice has to
+travel with a binary release.
+
+### The Flutter engine and framework
+
+BSD 3-Clause. Their notices travel with the Flutter SDK —
 `$FLUTTER_ROOT/bin/cache/pkg/sky_engine/LICENSE` and
 `$FLUTTER_ROOT/packages/flutter/LICENSE`.
 

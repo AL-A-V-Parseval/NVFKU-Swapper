@@ -26,6 +26,7 @@ import 'about_view.dart';
 import 'addons_view.dart';
 import 'design.dart';
 import 'engine.dart';
+import 'glass_surface.dart';
 import 'game_sheet.dart';
 import 'games_view.dart';
 import 'home_view.dart';
@@ -492,24 +493,14 @@ class _Sidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
-    return Container(
+    // Structural glass: the heaviest of the three weights. The stroke, the two
+    // shadows and the radius all come from `GlassSurface`, so this panel and the
+    // status bar cannot drift apart.
+    final _ = dark; // kept: the weight itself decides the shadow now
+    return GlassSurface(
+      weight: GlassWeight.structural,
       width: AppSpace.sidebarWidth,
       margin: const EdgeInsets.all(AppSpace.md),
-      decoration: BoxDecoration(
-        color: AppColors.chrome(context),
-        borderRadius: BorderRadius.circular(AppSpace.radiusShell),
-        border: Border.all(color: AppColors.stroke(context)),
-        // Two shadows: a tight one that seats the panel and a wide soft one that
-        // lifts it. A single mid-sized shadow vanishes against a near-black page.
-        boxShadow: dark
-            ? const [
-                BoxShadow(color: Color(0x8C000000), blurRadius: 5, offset: Offset(0, 2)),
-                BoxShadow(color: Color(0x99000000), blurRadius: 60, offset: Offset(0, 26)),
-              ]
-            : const [
-                BoxShadow(color: Color(0x1A14202D), blurRadius: 40, offset: Offset(0, 18)),
-              ],
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -718,14 +709,17 @@ class _StatusBar extends StatelessWidget {
     final theme = Theme.of(context);
     final tone = failed ? AppColors.danger(context) : theme.colorScheme.onSurfaceVariant;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.chrome(context),
-        border: Border(
-          top: BorderSide(
-            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-          ),
-        ),
+    // Bar weight, and a margin rather than a top border: the skill's "scroll edge
+    // effect, not a hard divider" — a floating bar over content, where the blur is
+    // what tells the eye the content continues underneath. A 1px rule spanning the
+    // window read as a seam in a window that no longer has any.
+    return GlassSurface(
+      weight: GlassWeight.bar,
+      margin: const EdgeInsets.fromLTRB(
+        AppSpace.md,
+        0,
+        AppSpace.md,
+        AppSpace.md,
       ),
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpace.lg,
