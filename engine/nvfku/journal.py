@@ -32,7 +32,13 @@ from typing import Iterable, Literal
 
 from .paths import Paths, atomic_write_text, make_executable, sha256_file
 
-OpKind = Literal["created", "replaced", "deleted", "mkdir", "symlink", "note"]
+#: Every kind this class can record. `adopted` and `absent` are produced by
+#: `adopt` and `record_absent`, so they belong here: leaving them out was both a
+#: wrong annotation — which is what the `type: ignore` in `install_file` was
+#: papering over — and a KeyError waiting in `Operation.describe`.
+OpKind = Literal[
+    "created", "replaced", "deleted", "mkdir", "symlink", "note", "adopted", "absent"
+]
 
 MANIFEST_VERSION = 1
 
@@ -60,6 +66,11 @@ class Operation:
             "mkdir": "mkdir",
             "symlink": "symlink",
             "note": "note",
+            # Both are recorded by this class and neither had a verb, so describing
+            # the operation raised KeyError — see the writer tests that adopt a file
+            # and record an absence.
+            "adopted": "adopt",
+            "absent": "absent",
         }[self.kind]
         extra = f" <- {self.source}" if self.source else ""
         note = f"  ({self.note})" if self.note else ""
@@ -217,7 +228,10 @@ class FileJournal:
         sha: str | None = None
         size: int | None = None
         mode: int | None = None
-        stored_as = "replaced" if existed else "created"
+        # Annotated so the type checker knows this is one of `OpKind`'s members
+        # rather than a plain `str` — which is what the `type: ignore` here used to
+        # suppress, back when `OpKind` was missing members this class produces.
+        stored_as: OpKind = "replaced" if existed else "created"
 
         if existed:
             pre = self._next_name(dest_path, "files")
@@ -238,7 +252,7 @@ class FileJournal:
                 mode = dest_path.stat().st_mode
 
         op = Operation(
-            kind=stored_as,  # type: ignore[arg-type]
+            kind=stored_as,
             path=str(dest_path),
             backup=backup_rel,
             sha256=sha,

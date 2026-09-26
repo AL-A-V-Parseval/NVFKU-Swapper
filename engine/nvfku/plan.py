@@ -91,9 +91,20 @@ class Checks:
         return not self.blockers
 
 
+#: Every kind of action a route may propose.
+#:
+#: A named alias rather than an inline `Literal`, because `from __future__ import
+#: annotations` turns a field annotation into a *string* — so a test cannot read
+#: `Action.__annotations__["kind"]` to learn what `line()` has to handle. The alias
+#: is a real object and can be introspected.
+ActionKind = Literal[
+    "copy", "write", "delete", "mkdir", "note", "launch-option", "fetch"
+]
+
+
 @dataclass
 class Action:
-    kind: Literal["copy", "write", "delete", "mkdir", "note", "launch-option"]
+    kind: ActionKind
     destination: str
     source: str | None = None
     reason: str = ""
@@ -107,9 +118,13 @@ class Action:
             "mkdir": "mkdir",
             "note": "note",
             "launch-option": "launch",
+            # Added with the model-download action. Its absence was a KeyError on
+            # every `plan`/`install` that reached it — which no test did, because the
+            # branch needs a machine without the tested model build on it.
+            "fetch": "fetch",
         }[self.kind]
         target = self.destination
-        if self.kind == "launch-option" or self.kind == "note":
+        if self.kind in ("launch-option", "note", "fetch"):
             body = target
         else:
             origin = f" <- {self.source}" if self.source else ""
