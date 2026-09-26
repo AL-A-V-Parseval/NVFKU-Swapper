@@ -19,7 +19,6 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 /// Size-specific type scale.
 abstract final class AppText {
@@ -96,15 +95,9 @@ abstract final class AppText {
 /// * **One bright hairline along the top edge.** The reference calls this the
 ///   difference between a flat rectangle and a surface, and it is right.
 /// * **Radial glows instead of a flat backdrop.** Two soft accent washes give the
-///   window a light source. They are *painted gradients*, not stacked translucent
-///   layers.
-/// * **Translucency is a budget, not a texture.** The skill says one translucent
-///   layer at most, because stacking light surfaces collapses legibility. A desktop
-///   shell is a case that has to work anyway — a sidebar, a status bar and a modal
-///   sheet really are on screen together — so the rule is honoured through
-///   *material weight* instead. See [GlassWeight]: the sidebar and status bar are
-///   heavy, near-opaque structural panels and only the sheet is light. A heavy
-///   material under a light one reads as depth; two light ones read as fog.
+///   window a light source. The apple-design skill's rule still applies on top of
+///   this: they are *painted gradients*, not stacked translucent layers, so a
+///   panel on top of them stays legible.
 abstract final class AppColors {
   /// The accent, shared by both themes. It is the brand colour.
   static const accentGreen = Color(0xFF6CC10A);
@@ -147,96 +140,6 @@ abstract final class AppColors {
   static Color stroke(BuildContext context) => _dark(context)
       ? Colors.white.withValues(alpha: 0.07)
       : Colors.black.withValues(alpha: 0.09);
-}
-
-/// The weight of one glass surface.
-///
-/// The skill's rule is "one translucent layer at most", and a desktop shell cannot
-/// obey it literally: the sidebar, the status bar and a modal sheet are on screen
-/// together whenever the sheet is open. Apple's own answer is material weight —
-/// structural regions get heavier material, interactive surfaces get lighter — so
-/// three glasses of *different* weight still read as a hierarchy rather than as
-/// fog. No fourth weight is added without a case where all three fail.
-enum GlassWeight {
-  /// Structural chrome: the sidebar. Darkest and thickest, so nav text on it keeps
-  /// its contrast whatever is scrolling behind.
-  structural,
-
-  /// A floating bar: the status line. It sits over content that moves, so it is
-  /// heavier than the sheet and lighter than the sidebar.
-  bar,
-
-  /// The modal sheet. The lightest, because it is the thing being attended to and
-  /// it has a scrim behind it doing most of the separating.
-  sheet,
-}
-
-/// Glass, as an extension of the design system rather than a second one.
-///
-/// The tonal steps in [AppColors] still exist and still do the work *inside* a
-/// surface — a card on a page, a row in a card. What changes is depth *between*
-/// regions: that is blur and shadow now, not a lighter grey.
-abstract final class GlassMaterial {
-  /// Corners, matched to the tonal system's radii so a glass panel and an opaque
-  /// card can sit side by side without reading as two designs.
-  static double radiusFor(GlassWeight weight) => switch (weight) {
-        GlassWeight.structural => AppSpace.radiusShell,
-        GlassWeight.bar => AppSpace.radiusLarge,
-        GlassWeight.sheet => AppSpace.radiusShell,
-      };
-
-  /// The tint/blur/thickness triad for a weight, per brightness.
-  ///
-  /// Conservative on purpose: the package caps desktop at `GlassQuality.standard`
-  /// and runs a lightweight 2D shader here, so a large `thickness` buys little and
-  /// widens the sampling kernel on every frame.
-  static LiquidGlassSettings settings(
-    BuildContext context,
-    GlassWeight weight,
-  ) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    // Tints are lifted off pure black. Pure-black glass over dark content reads as
-    // a hole rather than a material; these keep enough body to be seen against the
-    // deep base while still letting the backdrop through.
-    final (tint, blur, thickness, saturation) = switch ((weight, dark)) {
-      (GlassWeight.structural, true) => (const Color(0xE60A0A0B), 24.0, 34.0, 1.2),
-      (GlassWeight.structural, false) => (const Color(0xE6EEF1F4), 24.0, 34.0, 1.2),
-      (GlassWeight.bar, true) => (const Color(0xCC0E1116), 18.0, 26.0, 1.3),
-      (GlassWeight.bar, false) => (const Color(0xCCF7F9FA), 18.0, 26.0, 1.3),
-      (GlassWeight.sheet, true) => (const Color(0xB312171F), 14.0, 20.0, 1.4),
-      (GlassWeight.sheet, false) => (const Color(0xB3FFFFFF), 14.0, 20.0, 1.4),
-    };
-    return LiquidGlassSettings(
-      glassColor: tint,
-      blur: blur,
-      thickness: thickness,
-      saturation: saturation,
-      // Chromatic aberration is what makes glass read as *refracting* rather than
-      // merely blurred, but it is the most expensive part of the shader and the
-      // worst for small text. Only the sheet — the least text over the busiest
-      // backdrop — gets any.
-      chromaticAberration: weight == GlassWeight.sheet ? 0.012 : 0.0,
-      lightIntensity: weight == GlassWeight.structural ? 0.35 : 0.5,
-      refractiveIndex: 1.2,
-    );
-  }
-
-  /// Text over glass cannot be flat grey: it loses contrast as the backdrop
-  /// changes underneath while scrolling. The skill's answer is a small
-  /// letter-spacing bump and a heavier weight, not a different colour.
-  static TextStyle vibrant(TextStyle base) => base.copyWith(
-        fontWeight: _bump(base.fontWeight),
-        letterSpacing: (base.letterSpacing ?? 0) + 0.15,
-      );
-
-  static FontWeight _bump(FontWeight? weight) => switch (weight) {
-        FontWeight.w300 => FontWeight.w400,
-        FontWeight.w400 => FontWeight.w500,
-        FontWeight.w500 => FontWeight.w600,
-        FontWeight.w600 => FontWeight.w700,
-        FontWeight.w700 => FontWeight.w800,
-        _ => FontWeight.w600,
-      };
 }
 
 /// Motion in Apple's own vocabulary.

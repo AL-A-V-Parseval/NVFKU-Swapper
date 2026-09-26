@@ -293,7 +293,6 @@ lists them in full; the short version:
 | `dlss5-bridge` | fetched from its publisher at install time | MIT |
 | `addon-dlssnr-linux`, `OptiScaler` | fetched from their publishers at install time | GPL-3.0 |
 | ReShade 6.8.0 | fetched from reshade.me at install time | BSD 3-Clause |
-| `liquid_glass_widgets` | compiled into the app bundle | MIT |
 | Flutter runtime | in a release archive | BSD 3-Clause |
 
 **The model is the one thing this project redistributes without a licence to do so.**

@@ -43,11 +43,20 @@ class Engine {
   /// Walks up from the executable looking for `engine/nvfku`. A build run
   /// from the project directory finds the checkout; an installed build relies
   /// on `NVFKU_ENGINE`.
+  ///
+  /// The walk goes to the filesystem root rather than stopping at a fixed depth.
+  /// A depth was tried first and was wrong: `app/build/linux/x64/release/bundle` is
+  /// **seven** levels below the checkout root, so a limit of six examined the bundle
+  /// and five of its ancestors, never reached the root, and fell back to
+  /// `Directory.current` — which then looked for the engine beside the executable.
+  /// The symptom was `/usr/bin/python3: No module named nvfku` in a window that had
+  /// otherwise started perfectly. There is no depth that is obviously right, and the
+  /// check is one `stat` per level, so it simply keeps going.
   static String _defaultProjectRoot() {
     final fromEnv = Platform.environment['NVFKU_ENGINE'];
     if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
     var dir = File(Platform.resolvedExecutable).parent;
-    for (var i = 0; i < 6; i++) {
+    while (true) {
       if (Directory('${dir.path}/engine/nvfku').existsSync()) {
         return dir.path;
       }

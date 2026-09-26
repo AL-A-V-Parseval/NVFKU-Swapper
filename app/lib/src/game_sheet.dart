@@ -18,7 +18,6 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:flutter/services.dart';
 
 import 'cover.dart';
@@ -123,15 +122,13 @@ class _GameSheetState extends State<GameSheet> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 720),
                 child: Material(
-                  // Transparent on purpose: this Material exists only to be an
-                  // ancestor for the dialogs and popup menus the sheet hosts. The
-                  // surface itself is the glass below.
-                  type: MaterialType.transparency,
+                  color: AppColors.card(context),
+                  clipBehavior: Clip.antiAlias,
+                  borderRadius: BorderRadius.circular(AppSpace.radiusLarge + 4),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(
-                        GlassMaterial.radiusFor(GlassWeight.sheet),
-                      ),
+                      borderRadius:
+                          BorderRadius.circular(AppSpace.radiusLarge + 4),
                       border: Border.all(color: AppColors.stroke(context)),
                       boxShadow: dark
                           ? const [
@@ -154,25 +151,8 @@ class _GameSheetState extends State<GameSheet> {
                               ),
                             ],
                     ),
-                    child: GlassContainer(
-                      // Sheet weight: the lightest material of the three, because
-                      // the scrim behind it is doing the separating. Radius,
-                      // stroke and the two shadows come from the weight, so this
-                      // panel cannot drift from the sidebar's.
-                      quality: GlassQuality.standard,
-                      shape: LiquidRoundedSuperellipse(
-                        borderRadius: GlassMaterial.radiusFor(GlassWeight.sheet),
-                      ),
-                      settings: GlassMaterial.settings(
-                        context,
-                        GlassWeight.sheet,
-                      ),
-                      // The sheet animates in, so its own compositing layer keeps
-                      // that motion off the raster thread.
-                      useOwnLayer: true,
-                      clipBehavior: Clip.antiAlias,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         _Hero(
                           game: widget.game,
@@ -193,8 +173,7 @@ class _GameSheetState extends State<GameSheet> {
                             onComponentDone: widget.onComponentDone,
                           ),
                         ),
-                        ],
-                      ),
+                      ],
                     ),
                   ),
                 ),

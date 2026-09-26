@@ -27,7 +27,6 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/rendering.dart';
 
@@ -48,13 +47,8 @@ GlobalKey _shotKey = GlobalKey();
 /// Swaps in a fresh boundary key.
 void _resetBoundary() => _shotKey = GlobalKey();
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // The glass shaders must be resident before the first frame, or the captures
-  // show the un-shaded fallback — a screen that looks broken rather than busy.
-  // The real app does this in `main()` too; the harness is a separate entrypoint
-  // and does not inherit it.
-  await LiquidGlassWidgets.initialize();
   // Chinese, so the captures show the localisation rather than the fallback.
   // The harness has no settings file to read, and the point of the capture is
   // to review the translated layout.

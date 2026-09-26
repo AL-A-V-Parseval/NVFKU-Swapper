@@ -270,7 +270,6 @@ docs/ui-design.md        这些设计决策，写在控件之前
 | `dlss5-bridge` | 安装时从发布方获取 | MIT |
 | `addon-dlssnr-linux`、`OptiScaler` | 安装时从发布方获取 | GPL-3.0 |
 | ReShade 6.8.0 | 安装时从 reshade.me 获取 | BSD 3-Clause |
-| `liquid_glass_widgets` | 编译进界面 bundle | MIT |
 | Flutter 运行时 | 在发布包里 | BSD 3-Clause |
 
 **模型是本项目唯一一个没有许可却仍在分发的文件。** 它没有官方下载：DLSS SDK 只提供
