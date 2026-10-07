@@ -248,9 +248,11 @@ static void my_application_activate(GApplication* application) {
           source, "org.gnome.desktop.interface", TRUE);
       if (schema != nullptr && g_settings_schema_has_key(schema, "color-scheme")) {
         GSettings* settings = g_settings_new("org.gnome.desktop.interface");
+        // Zero means default signal flags, also on pre-2.74 GLib headers
+        // (Ubuntu 22.04), which do not define G_CONNECT_DEFAULT.
         g_signal_connect_object(settings, "changed::color-scheme",
                                 G_CALLBACK(nvfku_color_scheme_changed),
-                                header_bar, G_CONNECT_DEFAULT);
+                                header_bar, static_cast<GConnectFlags>(0));
         g_object_unref(settings);
       }
     }
@@ -265,7 +267,7 @@ static void my_application_activate(GApplication* application) {
     if (monitor != nullptr) {
       g_signal_connect_object(monitor, "changed",
                               G_CALLBACK(nvfku_settings_changed), header_bar,
-                              G_CONNECT_DEFAULT);
+                              static_cast<GConnectFlags>(0));
       g_object_ref_sink(monitor);
     }
   }
