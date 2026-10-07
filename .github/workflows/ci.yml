@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       PYTHONPATH: ${{ github.workspace }}/engine
+      NVFKU_ENGINE: ${{ github.workspace }}
       PYTHONDONTWRITEBYTECODE: '1'
       PUB_CACHE: ${{ github.workspace }}/.pub-cache
     steps:

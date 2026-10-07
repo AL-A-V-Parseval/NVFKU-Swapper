@@ -15,19 +15,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nvfku_ui/src/engine.dart';
 import 'package:nvfku_ui/src/l10n.dart';
 
+import 'support/engine_fixture.dart';
+
 void main() {
-  final projectRoot = Platform.environment['NVFKU_ENGINE'] ??
-      '/run/media/jackyji/Documents/DLSS5-swapper-linux';
+  final projectRoot = engineCheckoutRoot();
 
   late Directory state;
   late Engine engine;
 
   setUp(() {
     state = Directory.systemTemp.createTempSync('nvfku-appearance-');
-    engine = Engine(
-      projectRoot: projectRoot,
-      stateDir: state.path,
-    );
+    engine = Engine(projectRoot: projectRoot, stateDir: state.path);
   });
 
   tearDown(() => state.deleteSync(recursive: true));
@@ -97,13 +95,16 @@ void main() {
       expect(appLanguage.value, AppLanguage.chinese);
     });
 
-    test('an invalid theme is refused by the engine, not silently stored', () async {
-      // The engine validates too, so a bad code is a failed write rather than a
-      // setting that appears to save and does nothing.
-      await expectLater(
-        engine.writeSettings(theme: 'ligth'),
-        throwsA(isA<EngineException>()),
-      );
-    });
+    test(
+      'an invalid theme is refused by the engine, not silently stored',
+      () async {
+        // The engine validates too, so a bad code is a failed write rather than a
+        // setting that appears to save and does nothing.
+        await expectLater(
+          engine.writeSettings(theme: 'ligth'),
+          throwsA(isA<EngineException>()),
+        );
+      },
+    );
   });
 }

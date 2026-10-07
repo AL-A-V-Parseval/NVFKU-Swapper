@@ -15,13 +15,37 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nvfku_ui/src/engine.dart';
 import 'package:nvfku_ui/src/l10n.dart';
 
-void main() {
-  final projectRoot = Platform.environment['NVFKU_ENGINE'] ??
-      '/run/media/jackyji/Documents/DLSS5-swapper-linux';
-  final available = Directory('$projectRoot/engine/nvfku').existsSync();
+import 'support/engine_fixture.dart';
 
-  setUp(() => appLanguage.value = AppLanguage.chinese);
-  tearDown(() => appLanguage.value = AppLanguage.system);
+void main() {
+  final projectRoot = engineCheckoutRoot();
+  late Directory fixture;
+  late File executable;
+  late Engine engine;
+
+  setUp(() async {
+    appLanguage.value = AppLanguage.chinese;
+    fixture = Directory.systemTemp.createTempSync('nvfku-language-');
+    final steam = Directory('${fixture.path}/Steam');
+    final steamApps = Directory('${steam.path}/steamapps');
+    final game = Directory('${steamApps.path}/common/Fixture Game')
+      ..createSync(recursive: true);
+    executable = File('${game.path}/FixtureGame.exe')
+      ..writeAsBytesSync(minimalGamePe());
+    File('${steamApps.path}/appmanifest_805550.acf').writeAsStringSync(
+      '"AppState" { "appid" "805550" "name" "Fixture Game" '
+      '"installdir" "Fixture Game" }',
+    );
+    engine = Engine(
+      projectRoot: projectRoot,
+      stateDir: '${fixture.path}/state',
+    );
+    await engine.writeSettings(steamRoot: steam.path);
+  });
+  tearDown(() {
+    appLanguage.value = AppLanguage.system;
+    fixture.deleteSync(recursive: true);
+  });
 
   test('textLanguage follows the language preference', () {
     appLanguage.value = AppLanguage.chinese;
@@ -32,46 +56,33 @@ void main() {
     expect(Engine.textLanguage, 'en', reason: 'system falls back to English');
   });
 
-  test(
-    'a plan comes back in Chinese when the language is Chinese',
-    () async {
-      final engine = Engine(projectRoot: projectRoot);
-      final plans = await engine.plan('805550', route: 'a1');
-      expect(plans, isNotEmpty);
+  test('a plan comes back in Chinese when the language is Chinese', () async {
+    final plans = await engine.plan('805550', route: 'a1');
+    expect(plans, isNotEmpty);
 
-      // The title is translated; the identifiers inside it are not.
-      expect(plans.first.title, contains('ReShade'));
-      expect(
-        plans.first.title,
-        isNot(contains('ReShade + dlss5-bridge + addon-dlssnr-linux (Proton)')),
-        reason: 'the English title should have been replaced by the Chinese one',
-      );
-      // A check name is localised too, which is the part a user reads first.
-      final names = plans.first.checks.map((c) => c.name).toList();
-      expect(names, contains('渲染 API'));
-      expect(names, isNot(contains('rendering API')));
-    },
-    skip: available ? false : 'engine checkout not available',
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+    // The title is translated; the identifiers inside it are not.
+    expect(plans.first.title, contains('ReShade'));
+    expect(
+      plans.first.title,
+      isNot(contains('ReShade + dlss5-bridge + addon-dlssnr-linux (Proton)')),
+      reason: 'the English title should have been replaced by the Chinese one',
+    );
+    // A check name is localised too, which is the part a user reads first.
+    final names = plans.first.checks.map((c) => c.name).toList();
+    expect(names, contains('渲染 API'));
+    expect(names, isNot(contains('rendering API')));
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
-  test(
-    'the same plan comes back in English when asked',
-    () async {
-      appLanguage.value = AppLanguage.english;
-      final engine = Engine(projectRoot: projectRoot);
-      final plans = await engine.plan('805550', route: 'a1');
-      final names = plans.first.checks.map((c) => c.name).toList();
-      expect(names, contains('rendering API'));
-      expect(names, isNot(contains('渲染 API')));
-    },
-    skip: available ? false : 'engine checkout not available',
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+  test('the same plan comes back in English when asked', () async {
+    appLanguage.value = AppLanguage.english;
+    final plans = await engine.plan('805550', route: 'a1');
+    final names = plans.first.checks.map((c) => c.name).toList();
+    expect(names, contains('rendering API'));
+    expect(names, isNot(contains('渲染 API')));
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   group('the reshade route', () {
     test('is a prerequisite of a1, not a route of its own', () async {
-      final engine = Engine(projectRoot: projectRoot);
       final all = await engine.plan('805550');
 
       // Two routes, exactly. ReShade used to be returned as a third, which made
@@ -79,8 +90,11 @@ void main() {
       expect(all.map((p) => p.route).toList(), ['a1', 'a2']);
 
       final a1 = all.firstWhere((p) => p.route == 'a1');
-      expect(a1.prerequisite, isNotNull,
-          reason: 'A1 needs ReShade as its proxy');
+      expect(
+        a1.prerequisite,
+        isNotNull,
+        reason: 'A1 needs ReShade as its proxy',
+      );
       expect(a1.prerequisite!.route, 'reshade');
 
       final a2 = all.firstWhere((p) => p.route == 'a2');
@@ -89,11 +103,9 @@ void main() {
       // A route asked for alone does not gain the other route's prerequisite.
       final onlyA2 = await engine.plan('805550', route: 'a2');
       expect(onlyA2.map((p) => p.route).toList(), ['a2']);
-    }, skip: available ? false : 'engine checkout not available',
-        timeout: const Timeout(Duration(minutes: 2)));
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
     test('its plan names the installer invocation it would run', () async {
-      final engine = Engine(projectRoot: projectRoot);
       final plans = await engine.plan('805550', route: 'a1');
       final reshade = plans.firstWhere((p) => p.route == 'a1').prerequisite!;
       final notes = reshade.actions
@@ -105,18 +117,20 @@ void main() {
       expect(notes, contains('--api dxgi'));
       // And the Vulkan path must never appear, because Wine cannot load a layer.
       expect(notes, isNot(contains('--api vulkan')));
-    }, skip: available ? false : 'engine checkout not available',
-        timeout: const Timeout(Duration(minutes: 2)));
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
     test('a Vulkan-only game is blocked with the layer explanation', () async {
-      final engine = Engine(projectRoot: projectRoot);
-      // No Steam game here is Vulkan-only, so assert on the rule through a game
-      // that is: if none exists, the engine-level test covers it.
+      appLanguage.value = AppLanguage.english;
+      executable.writeAsBytesSync(minimalGamePe(importedDll: 'vulkan-1.dll'));
       final plans = await engine.plan('805550', route: 'a1');
       final reshade = plans.firstWhere((p) => p.route == 'a1').prerequisite!;
-      expect(reshade.checks, isNotEmpty);
-    }, skip: available ? false : 'engine checkout not available',
-        timeout: const Timeout(Duration(minutes: 2)));
+      final apiCheck = reshade.checks.singleWhere(
+        (c) => c.name == 'rendering API',
+      );
+      expect(apiCheck.severity, 'blocker');
+      expect(apiCheck.detail, contains('Vulkan'));
+      expect(apiCheck.fix?.toLowerCase(), contains('layer'));
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 
   group('locale plumbing', () {
