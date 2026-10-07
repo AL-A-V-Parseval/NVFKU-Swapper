@@ -280,6 +280,16 @@ class WriteFileTest(unittest.TestCase):
         self.assertFalse(result.verified)
         self.assertEqual(self.config.read_text(), FIXTURE)
 
+    def test_clear_dry_run_leaves_config_and_state_root_absent(self) -> None:
+        result = steamconfig.clear_launch_options(
+            self.paths, "1091500", config_path=self.config,
+            proc_root=str(self.proc), dry_run=True,
+        )
+        self.assertFalse(result.verified)
+        self.assertIsNone(result.backup)
+        self.assertEqual(self.config.read_text(), FIXTURE)
+        self.assertFalse(self.paths.state_root.exists())
+
     def test_a_damaged_file_is_refused_before_any_backup(self) -> None:
         self.config.write_text(FIXTURE + "\n}\n")  # unbalanced
         with self.assertRaises(steamconfig.SteamConfigError):

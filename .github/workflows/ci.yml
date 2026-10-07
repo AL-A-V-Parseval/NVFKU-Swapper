@@ -1,0 +1,79 @@
+name: Checks and Linux release smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Isolated standard-library regressions
+        env:
+          PYTHONPATH: ${{ github.workspace }}/engine
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m unittest discover -s engine/tests -q
+          python -m compileall -q engine/nvfku tools
+          git diff --check
+
+  flutter-and-packages:
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONPATH: ${{ github.workspace }}/engine
+      PYTHONDONTWRITEBYTECODE: '1'
+      PUB_CACHE: ${{ github.workspace }}/.pub-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux build and artifact inspection dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libblkid-dev libepoxy-dev librsvg2-bin desktop-file-utils binutils
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Flutter regressions, analysis and release build
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter test --no-pub --reporter expanded
+          flutter analyze --no-pub
+          flutter build linux --release --no-pub
+      - name: Build model-free portable and Debian candidates
+        run: |
+          python tools/package.py --format tar --out dist/ci
+          python tools/package.py --format deb --out dist/ci
+      - name: Verify source bytes, provenance, dependencies and isolated CLI
+        run: python tools/verify_release.py --out dist/ci --require-format tar --require-format deb
+      # These are CI artifacts, never a GitHub Release or an installation.
+      # AppImage's external build tool and native/FUSE launch remain a separate
+      # local gate documented in docs/release-workflow.md.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-candidates-${{ github.sha }}
+          path: |
+            dist/ci/*.tar.gz
+            dist/ci/*.deb
+            dist/ci/SHA256SUMS
+          retention-days: 7

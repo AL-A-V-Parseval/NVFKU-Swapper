@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..journal import FileJournal
+from .transaction import locked_install, preflight_files, transaction
 from ..messages import text
 from ..paths import Paths, human_size
 from ..plan import Action, Checks, InstallRefused, InstallResult, Missing, RoutePlan
@@ -454,6 +455,7 @@ def _find_seed_ini(extracted: list[Path]) -> Path | None:
     return None
 
 
+@locked_install
 def install(
     paths: Paths,
     game: Game,
@@ -464,8 +466,8 @@ def install(
 ) -> InstallResult:
     """Apply A2.
 
-    The proxy filename is persisted in the route state before anything else, so
-    a later reinstall reuses the same name instead of installing a second proxy.
+    Downloads and INI preparation precede mutation. Files and route state share
+    one compensating journal; a reinstall reuses the recorded proxy name.
     """
     route_plan = plan(paths, game)
     if not route_plan.viable:
@@ -537,21 +539,6 @@ def install(
     if chosen is None:
         raise InstallRefused(f"no usable {NR_MODEL_NAME} found; A2 cannot run without it")
 
-    # --- 4. apply, journalled ---------------------------------------------
-    journal = FileJournal(paths, game.install_dir, ROUTE, game_key=game.key)
-    result.journal_id = journal.journal_id
-    logger(f"journal {journal.journal_id} in {journal.dir}")
-
-    logger(f"  [1/3] proxy DLL -> {proxy_name}")
-    journal.install_file(proxy_source, exe_dir / proxy_name, source_label=f"OptiScaler {component.version}")
-
-    logger("  [2/3] model")
-    if chosen.path.parent == exe_dir:
-        journal.note(f"{NR_MODEL_NAME} already beside the executable; left as it is")
-    else:
-        journal.install_file(chosen.path, exe_dir / NR_MODEL_NAME, source_label=f"NVIDIA model ({chosen.verdict})")
-
-    logger(f"  [3/3] OptiScaler.ini ([DlssNr] WorkingScale={scale})")
     ini_path = exe_dir / "OptiScaler.ini"
     if ini_path.is_file():
         existing = ini_path.read_text(encoding="utf-8", errors="replace")
@@ -560,29 +547,52 @@ def install(
         existing = seed.read_text(encoding="utf-8", errors="replace") if seed else None
         if seed:
             logger(f"  seed     {seed.name} from the archive")
-    journal.write_text(
-        ini_path,
-        render_ini(existing, working_scale=scale),
-        source_label="nvfku generated [DlssNr] section",
-    )
+    ini_text = render_ini(existing, working_scale=scale)
+    preflight_files(game.install_dir, [proxy_source, chosen.path], [
+        exe_dir / proxy_name, exe_dir / NR_MODEL_NAME, ini_path,
+    ])
 
-    journal.finish()
+    # --- 4. apply, journalled ---------------------------------------------
+    journal = FileJournal(paths, game.install_dir, ROUTE, game_key=game.key)
+    result.journal_id = journal.journal_id
+    logger(f"journal {journal.journal_id} in {journal.dir}")
 
-    # --- 5. record --------------------------------------------------------
-    state.update(
-        {
-            "installed_at": journal._journal.created_at,
-            "journal_id": journal.journal_id,
-            "exe_dir": str(exe_dir),
-            "proxy_name": proxy_name,
-            "installed_proxy_name": proxy_name,
-            "working_scale": scale,
-            "optiscaler_version": component.version,
-            "model_source": str(chosen.path),
-            "model_verdict": chosen.verdict,
-        }
-    )
-    providers.write_route_state(paths, game.key, ROUTE, state)
+    with transaction(journal):
+        logger(f"  [1/3] proxy DLL -> {proxy_name}")
+        journal.install_file(proxy_source, exe_dir / proxy_name, source_label=f"OptiScaler {component.version}")
+
+        logger("  [2/3] model")
+        if chosen.path.parent == exe_dir:
+            journal.note(f"{NR_MODEL_NAME} already beside the executable; left as it is")
+        else:
+            journal.install_file(chosen.path, exe_dir / NR_MODEL_NAME, source_label=f"NVIDIA model ({chosen.verdict})")
+
+        logger(f"  [3/3] OptiScaler.ini ([DlssNr] WorkingScale={scale})")
+        journal.write_text(
+            ini_path,
+            ini_text,
+            source_label="nvfku generated [DlssNr] section",
+        )
+
+        # --- 5. record --------------------------------------------------------
+        state_op = journal.snapshot_external(
+            providers.route_state_path(paths, game.key, ROUTE), source_label="route state"
+        )
+        state.update(
+            {
+                "installed_at": journal._journal.created_at,
+                "journal_id": journal.journal_id,
+                "exe_dir": str(exe_dir),
+                "proxy_name": proxy_name,
+                "installed_proxy_name": proxy_name,
+                "working_scale": scale,
+                "optiscaler_version": component.version,
+                "model_source": str(chosen.path),
+                "model_verdict": chosen.verdict,
+            }
+        )
+        providers.write_route_state(paths, game.key, ROUTE, state)
+        journal.seal_external(state_op)
     if chosen.verdict == "tested":
         result.verified.append(f"{NR_MODEL_NAME} is the measured-stable build")
     else:

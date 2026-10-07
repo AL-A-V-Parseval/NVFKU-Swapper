@@ -1,4 +1,4 @@
-# Isolation: keep every toolchain artifact out of the repository and out of $HOME
+# Isolation: generated project caches stay untracked; system tools are untouched
 .venv/
 .pub-cache/
 app/.dart_tool/
@@ -29,5 +29,5 @@ Thumbs.db
 vendor/*
 !vendor/README.md
 
-# Release archives: ~119 MiB each, rebuilt on demand by tools/make_release.py.
+# Model-free release candidates, rebuilt on demand by tools/package.py.
 dist/

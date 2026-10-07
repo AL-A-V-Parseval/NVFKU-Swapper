@@ -49,7 +49,10 @@ class Component:
     notes: str | None = None
 
     def local_path(self, paths: Paths) -> Path:
-        cache = paths.download_cache() / self.id
+        import hashlib
+
+        identity = hashlib.sha256(json.dumps([self.version, self.url]).encode()).hexdigest()[:24]
+        cache = paths.download_cache() / self.id / identity
         cache.mkdir(parents=True, exist_ok=True)
         return cache / (self.filename or Path(self.url).name)
 
@@ -310,17 +313,39 @@ def http_json(url: str) -> dict:
     return json.loads(http_get(url, accept="application/vnd.github+json").decode("utf-8"))
 
 
-def fetch(component: Component, paths: Paths, *, logger=print) -> Path:
-    """Download to the cache, verifying a pinned digest when there is one."""
+def fetch(component: Component, paths: Paths, *, logger=print, skip_download: bool = False) -> Path:
+    """Validate cached and fetched bytes identically; offline mode never fetches."""
     target = component.local_path(paths)
+    receipt = target.with_name(target.name + ".integrity.json")
+    cached_digest = component.sha256
+    cached_size = component.size
+    if cached_digest is None:
+        try:
+            record = json.loads(receipt.read_text(encoding="utf-8"))
+            if (record["version"] == component.version and record["url"] == component.url
+                    and isinstance(record["sha256"], str)
+                    and len(record["sha256"]) == 64
+                    and isinstance(record["size"], int) and record["size"] > 0):
+                cached_digest, cached_size = record["sha256"], record["size"]
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     if target.is_file():
-        if component.sha256 is None or sha256_file(target) == component.sha256:
+        if cached_digest is not None and (cached_size is None or target.stat().st_size == cached_size) and (
+            component.size is None or target.stat().st_size == component.size
+        ) and sha256_file(target) == cached_digest.lower():
             logger(f"  cached   {target.name} ({human_size(target.stat().st_size)})")
             return target
-        logger(f"  stale    {target.name} (digest changed), re-downloading")
+        logger(f"  stale    {target.name} (size/digest changed), re-downloading")
+    if skip_download:
+        raise ValueError(f"{component.name} is missing or invalid in cache and --skip-download was given")
 
     logger(f"  fetch    {component.url}")
     blob = http_get(component.url, timeout=300)
+    import hashlib
+
+    if not blob:
+        raise ValueError(f"{component.name}: empty response")
+    blob_digest = hashlib.sha256(blob).hexdigest()
     if component.size is not None and len(blob) != component.size:
         raise ValueError(
             f"{component.name}: expected {component.size} bytes, got {len(blob)}"
@@ -329,12 +354,31 @@ def fetch(component: Component, paths: Paths, *, logger=print) -> Path:
         import hashlib
 
         digest = hashlib.sha256(blob).hexdigest()
-        if digest != component.sha256:
+        if digest != component.sha256.lower():
             raise ValueError(
                 f"{component.name}: SHA-256 mismatch\n  expected {component.sha256}\n  got      {digest}"
             )
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(blob)
+    import tempfile
+
+    fd, name = tempfile.mkstemp(prefix=".download-", suffix=".part", dir=target.parent)
+    os.close(fd)
+    partial = Path(name)
+    try:
+        partial.write_bytes(blob)
+        if partial.stat().st_size != len(blob):
+            raise OSError(f"short cache write for {component.name}")
+        if sha256_file(partial) != blob_digest:
+            raise ValueError(f"{component.name}: staged SHA-256 mismatch")
+        os.replace(partial, target)
+        # A local digest detects cache damage, not upstream authenticity. Missing
+        # or mismatched receipts are cache misses, including interrupted publishes.
+        atomic_write_text(receipt, json.dumps({
+            "version": component.version, "url": component.url,
+            "sha256": blob_digest, "size": len(blob),
+        }))
+    finally:
+        partial.unlink(missing_ok=True)
     logger(f"  saved    {target.name} ({human_size(len(blob))})")
     return target
 
@@ -666,7 +710,7 @@ def extract_7z(archive: Path, dest: Path, *, strip_components: int = 0, logger=p
     return [p for p in dest.rglob("*") if p.is_file()]
 
 
-def fetch_asset(component: "Component", asset_name: str, paths: Paths, *, logger=print) -> Path:
+def fetch_asset(component: "Component", asset_name: str, paths: Paths, *, logger=print, skip_download: bool = False) -> Path:
     """Download a sibling asset of the same release (e.g. SHA256SUMS.txt).
 
     Kept separate from :func:`fetch` because the sibling has no pinned digest of
@@ -676,19 +720,11 @@ def fetch_asset(component: "Component", asset_name: str, paths: Paths, *, logger
 
     base = component.url.rsplit("/", 1)[0]
     url = f"{base}/{urllib.parse.quote(asset_name)}"
-    cache = paths.download_cache() / component.id
-    cache.mkdir(parents=True, exist_ok=True)
-    target = cache / asset_name
-    if target.is_file() and target.stat().st_size > 0:
-        logger(f"  cached   {asset_name}")
-        return target
-    logger(f"  fetch    {url}")
-    blob = http_get(url, timeout=120)
-    if not blob:
-        raise ValueError(f"{asset_name}: empty response")
-    target.write_bytes(blob)
-    logger(f"  saved    {asset_name} ({human_size(len(blob))})")
-    return target
+    sibling = Component(
+        id=component.id, name=asset_name, version=component.version,
+        url=url, filename=asset_name,
+    )
+    return fetch(sibling, paths, logger=logger, skip_download=skip_download)
 
 
 def parse_shasums(text: str) -> dict[str, str]:

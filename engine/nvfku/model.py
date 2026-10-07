@@ -199,18 +199,15 @@ def discover(paths: Paths, game: Game) -> list[ModelCandidate]:
         except OSError:
             pass
 
-    # 1. What the game already ships.  Cheapest and most correct source.  The
-    # prune list applies here, where it is about game trees.
+    # 1. Reuse the bounded game inventory. A hand-created/legacy Game has no
+    # completeness marker and needs one scan; a detected Game never rewalks.
+    from .steam import _inventory_game, _is_backup_path
+
+    if game.detection_complete is None:
+        _inventory_game(game)
     for existing in game.nvngx_dlssnr:
-        if not any(part.lower() in _GAME_TREE_PRUNE for part in existing.parts[:-1]):
+        if not _is_backup_path(existing, game.install_dir):
             consider(existing)
-    try:
-        for hit in list(game.install_dir.rglob(MODEL_NAME))[:4]:
-            if any(part.lower() in _GAME_TREE_PRUNE for part in hit.parts[:-1]):
-                continue
-            consider(hit)
-    except OSError:
-        pass
     if game.launch_exe is not None:
         consider(game.launch_exe.parent / MODEL_NAME)
 
@@ -288,6 +285,9 @@ def discover(paths: Paths, game: Game) -> list[ModelCandidate]:
         )
 
     candidates.sort(key=rank)
+    if not candidates and game.detection_complete is False:
+        raise RuntimeError("model discovery incomplete; absence is not established: "
+                           + "; ".join(game.detection_warnings))
     return candidates
 
 

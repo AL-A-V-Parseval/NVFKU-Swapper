@@ -42,28 +42,69 @@ class CoverThumb extends StatelessWidget {
       child: SizedBox(
         width: width,
         height: height,
-        child: file != null && file.existsSync()
-            ? Image.file(
-                file,
-                fit: BoxFit.cover,
-                // A corrupt or half-written image must degrade to the
-                // placeholder, not to a red error box in the middle of a list.
-                errorBuilder: (context, error, stack) => _Placeholder(
-                  name: name,
-                  width: width,
-                  height: height,
-                ),
-                // Fade in on load so a scrolling list does not flash.
-                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                  if (wasSynchronouslyLoaded || frame != null) return child;
-                  return _Placeholder(name: name, width: width, height: height);
-                },
-              )
-            : _Placeholder(name: name, width: width, height: height),
+        child:
+            file != null
+                ? LayoutBuilder(
+                  builder: (context, constraints) {
+                    final dpr = MediaQuery.devicePixelRatioOf(context);
+                    final resolvedWidth =
+                        constraints.hasBoundedWidth
+                            ? constraints.maxWidth
+                            : (width.isFinite ? width : 44.0);
+                    final resolvedHeight =
+                        constraints.hasBoundedHeight
+                            ? constraints.maxHeight
+                            : (height.isFinite ? height : 66.0);
+                    // A finite per-axis budget bounds decode even on very large/high
+                    // DPI windows. Fit preserves the source aspect ratio; BoxFit.cover
+                    // handles any cropping, rather than distorting the decoded image.
+                    final decodeWidth = (resolvedWidth * dpr).ceil().clamp(
+                      1,
+                      1024,
+                    );
+                    final decodeHeight = (resolvedHeight * dpr).ceil().clamp(
+                      1,
+                      1024,
+                    );
+                    return Image(
+                      image: ResizeImage(
+                        FileImage(file),
+                        width: decodeWidth,
+                        height: decodeHeight,
+                        policy: ResizeImagePolicy.fit,
+                      ),
+                      fit: BoxFit.cover,
+                      // A corrupt or half-written image must degrade to the
+                      // placeholder, not to a red error box in the middle of a list.
+                      errorBuilder:
+                          (context, error, stack) => _Placeholder(
+                            name: name,
+                            width: width,
+                            height: height,
+                          ),
+                      // Fade in on load so a scrolling list does not flash.
+                      frameBuilder: (
+                        context,
+                        child,
+                        frame,
+                        wasSynchronouslyLoaded,
+                      ) {
+                        if (wasSynchronouslyLoaded || frame != null) {
+                          return child;
+                        }
+                        return _Placeholder(
+                          name: name,
+                          width: width,
+                          height: height,
+                        );
+                      },
+                    );
+                  },
+                )
+                : _Placeholder(name: name, width: width, height: height),
       ),
     );
   }
-
 }
 
 class _Placeholder extends StatelessWidget {
@@ -87,18 +128,28 @@ class _Placeholder extends StatelessWidget {
     final trimmed = name.trim();
     final initial = trimmed.isEmpty ? '?' : trimmed.substring(0, 1);
 
-    return Container(
-      width: width,
-      height: height,
-      alignment: Alignment.center,
-      color: theme.colorScheme.primary.withValues(alpha: 0.14),
-      child: Text(
-        initial,
-        style: AppText.subtitle.copyWith(
-          color: theme.colorScheme.primary,
-          fontSize: height * 0.34,
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Grid covers request infinite dimensions to fill their slot. Use the
+        // resolved height, never that request, when sizing the placeholder glyph.
+        final resolvedHeight =
+            constraints.hasBoundedHeight
+                ? constraints.maxHeight
+                : (height.isFinite ? height : 66.0);
+        return Container(
+          width: width,
+          height: height,
+          alignment: Alignment.center,
+          color: theme.colorScheme.primary.withValues(alpha: 0.14),
+          child: Text(
+            initial,
+            style: AppText.subtitle.copyWith(
+              color: theme.colorScheme.primary,
+              fontSize: (resolvedHeight * 0.34).clamp(12.0, 96.0),
+            ),
+          ),
+        );
+      },
     );
   }
 }

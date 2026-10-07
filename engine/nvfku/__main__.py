@@ -164,6 +164,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="compare components against the publisher's published digests",
     )
+    conf.add_argument(
+        "--theme",
+        choices=["system", "dark", "light"],
+        default=None,
+        help="interface colour scheme (default: follow the desktop)",
+    )
+    conf.add_argument(
+        "--language",
+        choices=["system", "en", "zh"],
+        default=None,
+        help="interface language (default: follow the desktop)",
+    )
 
     art = sub.add_parser(
         "artwork", help="fetch Steam cover images for the library (cached locally)"
@@ -260,11 +272,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _paths_from(args) -> Paths:
     paths = Paths.discover(state_root=args.state_dir)
-    if args.steam_root is not None:
+    steam_root = args.steam_root
+    if steam_root is None:
+        from .settings import load_settings
+
+        configured_root = load_settings(paths).steam_root
+        if configured_root:
+            steam_root = Path(configured_root).expanduser()
+    if steam_root is not None:
         paths = Paths(
             home=paths.home,
             state_root=paths.state_root,
-            steam_root=args.steam_root,
+            steam_root=steam_root,
             windows_mounts=paths.windows_mounts,
             extra_search_dirs=paths.extra_search_dirs,
         )
@@ -283,36 +302,29 @@ def _find_game(games: list[steam.Game], needle: str) -> steam.Game | None:
     return partial[0] if partial else None
 
 
-def _resolve_one(paths, needle: str) -> "steam.Game | None":
-    """One game, by the cheapest route that works.
+def _scan_games(paths: Paths) -> list[steam.Game]:
+    """The same Steam and registered-folder library for every CLI command."""
+    from .settings import scan_added_games
 
-    An appid names its own manifest, so it is a direct lookup; a name only exists
-    inside the manifests, so it needs the scan. Falling back costs a second when the
-    fast path finds nothing, and saves ten on every command a UI makes.
-    """
-    game = steam.scan_one(paths, needle)
-    if game is not None:
-        return game
-    return _find_game(steam.scan_with_cache(paths), needle)
+    games = steam.scan_with_cache(paths)
+    games.extend(scan_added_games(paths))
+    games.sort(key=lambda game: game.name.lower())
+    return games
+
+
+def _resolve_one(paths: Paths, needle: str) -> steam.Game | None:
+    """Look up Steam appids directly; scan the shared library for other keys/names."""
+    appid = needle.removeprefix("steam-") if needle.startswith("steam-") else needle
+    if appid.isdigit():
+        game = steam.scan_one(paths, appid)
+        if game is not None:
+            return game
+    return _find_game(_scan_games(paths), needle)
 
 
 def cmd_scan(args) -> int:
-    from . import settings as settings_module
-
     paths = _paths_from(args)
-    settings = settings_module.load_settings(paths)
-    if settings.steam_root and args.steam_root is None:
-        paths = Paths(
-            home=paths.home,
-            state_root=paths.state_root,
-            steam_root=Path(settings.steam_root),
-            windows_mounts=paths.windows_mounts,
-            extra_search_dirs=paths.extra_search_dirs,
-        )
-    games = steam.scan_with_cache(paths)
-    # Hand-added folders, for installs Steam does not know about.
-    games.extend(settings_module.scan_added_games(paths))
-    games.sort(key=lambda g: g.name.lower())
+    games = _scan_games(paths)
     if args.filter:
         needle = args.filter.lower()
         games = [g for g in games if needle in g.name.lower() or needle == g.appid]
@@ -355,8 +367,7 @@ def cmd_scan(args) -> int:
 
 def cmd_show(args) -> int:
     paths = _paths_from(args)
-    games = steam.scan_with_cache(paths)
-    game = _find_game(games, args.game)
+    game = _resolve_one(paths, args.game)
     if game is None:
         print(f"no game matching {args.game!r}", file=sys.stderr)
         return 1
@@ -511,8 +522,7 @@ def cmd_launch_options(args) -> int:
     from . import steamconfig
 
     paths = _paths_from(args)
-    games = steam.scan_with_cache(paths)
-    game = _find_game(games, args.game)
+    game = _resolve_one(paths, args.game)
     if game is None:
         message = f"no game matching {args.game!r}"
         print(json.dumps({"ok": False, "error": message}) if args.json else message,
@@ -558,7 +568,9 @@ def cmd_launch_options(args) -> int:
 
     try:
         if args.clear:
-            result = steamconfig.clear_launch_options(paths, game.appid, config_path=config)
+            result = steamconfig.clear_launch_options(
+                paths, game.appid, config_path=config, dry_run=args.dry_run
+            )
         else:
             result = steamconfig.set_launch_options(
                 paths, game.appid, value, config_path=config, dry_run=args.dry_run
@@ -578,7 +590,7 @@ def cmd_launch_options(args) -> int:
             "value": result.value,
             "previous": result.previous,
             "config": str(result.path),
-            "backup": str(result.backup),
+            "backup": str(result.backup) if result.backup else None,
             "created_key": result.created_key,
             "verified": result.verified,
             "notes": result.notes,
@@ -645,24 +657,42 @@ def cmd_settings(args) -> int:
     from . import settings as settings_module
 
     paths = _paths_from(args)
-    settings = settings_module.load_settings(paths)
-    changed = False
-    for attribute, value in (
+    changes = {attribute: value for attribute, value in (
         ("python_path", args.python),
         ("steam_root", args.steam_root),
         ("download_cache", args.download_cache),
         ("proxy_mode", args.proxy),
-    ):
-        if value is not None:
-            setattr(settings, attribute, value)
-            changed = True
+        ("theme", args.theme),
+        ("language", args.language),
+    ) if value is not None}
     if args.verify_upstream is not None:
-        settings.verify_upstream = args.verify_upstream == "yes"
-        changed = True
+        changes["verify_upstream"] = args.verify_upstream == "yes"
+    changed = bool(changes)
+    try:
+        settings = (settings_module.update_settings(paths, **changes) if changed
+                    else settings_module.load_settings(paths))
+        settings.validate()
+    except (ValueError, OSError) as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        else:
+            print(f"nvfku: {exc}", file=sys.stderr)
+        return 2
 
-    path = settings_module.save_settings(paths, settings) if changed else settings_module.settings_path(paths)
+    path = settings_module.settings_path(paths)
     if args.json:
-        print(json.dumps({"settings": settings.to_dict(), "file": str(path)}, indent=2))
+        # `stored` distinguishes "the user chose this" from "this is the default".
+        # Without it a caller cannot tell an explicitly-chosen `system` from no file
+        # at all, because every field has a working default — and a preference loader
+        # that cannot tell the two apart overwrites a deliberate choice on first run.
+        # True once the write above has happened, since the values are then on disk.
+        stored = changed or Path(path).is_file()
+        print(
+            json.dumps(
+                {"settings": settings.to_dict(), "file": str(path), "stored": stored},
+                indent=2,
+            )
+        )
         return 0
     print(f"settings ({path})")
     for label, value in settings.describe():
@@ -682,8 +712,7 @@ def cmd_reshade(args) -> int:
     from .plan import InstallRefused, render_plan
 
     paths = _paths_from(args)
-    games = steam.scan_with_cache(paths)
-    game = _find_game(games, args.game)
+    game = _resolve_one(paths, args.game)
     if game is None:
         message = f"no game matching {args.game!r}"
         print(json.dumps({"ok": False, "error": message}) if args.json else message,
@@ -810,8 +839,7 @@ def cmd_backups(args) -> int:
     paths = _paths_from(args)
     game_dir = None
     if args.game:
-        games = steam.scan_with_cache(paths)
-        game = _find_game(games, args.game)
+        game = _resolve_one(paths, args.game)
         if game is None:
             print(f"no game matching {args.game!r}", file=sys.stderr)
             return 1
@@ -833,16 +861,25 @@ def cmd_backups(args) -> int:
 
 def cmd_rollback(args) -> int:
     paths = _paths_from(args)
-    lines = rollback_journal(paths, args.journal_id)
-    for line in lines:
-        print(line)
-    return 0 if lines else 1
+    try:
+        report = rollback_journal(paths, args.journal_id)
+    except (OSError, ValueError, KeyError) as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "report": [], "failed": [str(exc)]}))
+        else:
+            print(f"rollback failed: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(report.to_dict()))
+    else:
+        for line in report:
+            print(line)
+    return 0 if report.ok else 1
 
 
 def cmd_install(args) -> int:
     paths = _paths_from(args)
-    games = steam.scan_with_cache(paths)
-    game = _find_game(games, args.game)
+    game = _resolve_one(paths, args.game)
     if game is None:
         if args.json:
             print(json.dumps({"ok": False, "error": f"no game matching {args.game!r}"}))
@@ -924,7 +961,7 @@ def cmd_install(args) -> int:
 
     try:
         result = module.install(paths, game, **kwargs)
-    except InstallRefused as exc:
+    except Exception as exc:
         if args.json:
             print(json.dumps({"ok": False, "refused": str(exc), "plan": route_plan.to_dict()}))
             return 2

@@ -289,7 +289,7 @@ def extract(source: Source, archive: Path, cache: Path) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     inner = out / MODEL_NAME
 
-    if inner.is_file() and sha256_file(inner) == source.build.sha256:
+    if inner.is_file() and inner.stat().st_size == source.build.size and sha256_file(inner) == source.build.sha256:
         return inner
 
     try:
@@ -297,6 +297,7 @@ def extract(source: Source, archive: Path, cache: Path) -> Path:
             member = _find_member(zf, source.inner)
             if member is None:
                 names = ", ".join(zf.namelist()[:8])
+                archive.unlink(missing_ok=True)
                 raise WeightsError(
                     f"{source.archive} does not contain {source.inner}; it holds: {names}"
                 )
@@ -311,16 +312,19 @@ def extract(source: Source, archive: Path, cache: Path) -> Path:
     digest = sha256_file(inner)
     if digest != source.build.sha256:
         inner.unlink(missing_ok=True)
+        archive.unlink(missing_ok=True)
         raise WeightsError(
             "the downloaded model does not match the pinned digest\n"
             f"  expected {source.build.sha256}\n"
             f"  got      {digest}\n"
             "  the file was discarded rather than installed"
         )
-    if inner.stat().st_size != source.build.size:
+    actual_size = inner.stat().st_size
+    if actual_size != source.build.size:
         inner.unlink(missing_ok=True)
+        archive.unlink(missing_ok=True)
         raise WeightsError(
-            f"the downloaded model is {inner.stat().st_size} bytes, expected "
+            f"the downloaded model is {actual_size} bytes, expected "
             f"{source.build.size}"
         )
     return inner

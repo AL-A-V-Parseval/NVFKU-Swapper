@@ -150,8 +150,11 @@ class Sandbox:
         for key, component in providers.PINNED.items():
             target = component.local_path(self.paths)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(f"component:{key}".encode())
-            sources[key] = target
+            payload = f"component:{key}".encode()
+            if component.size is not None:
+                payload = payload.ljust(component.size, b"\x00")
+            with mock.patch.object(providers, "http_get", return_value=payload):
+                sources[key] = providers.fetch(component, self.paths, logger=lambda *_: None)
         return sources
 
 
@@ -243,6 +246,38 @@ class A1InstallTest(InstallTestBase):
         lines = rollback_journal(self.sandbox.paths, result.journal_id)
         self.assertTrue(lines)
         self.assertEqual(self.snapshot(self.sandbox.install_dir), before)
+
+    def test_mid_install_failure_restores_game_steam_and_route_state(self) -> None:
+        game = self.sandbox.game()
+        self.sandbox.stub_model()
+        config = self.sandbox.steam / "userdata/1/config/localconfig.vdf"
+        route_state = providers.route_state_path(self.sandbox.paths, game.key, "a1")
+        route_state.write_text('{"version": 1, "custom": "keep"}')
+        before_game = self.snapshot(self.sandbox.install_dir)
+        before_config = config.read_bytes()
+        before_state = route_state.read_bytes()
+        original = a1_bridge.FileJournal.install_file
+        calls = 0
+
+        def fail_second(journal, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("simulated second file failure")
+            return original(journal, *args, **kwargs)
+
+        # Automatic rollback checks Steam independently of install's proc_root.
+        # This fabricated Steam library must not depend on the host Steam client.
+        with mock.patch.object(a1_bridge.FileJournal, "install_file", fail_second), \
+                mock.patch("nvfku.steamconfig.running_steam_processes", return_value=[]):
+            with self.assertRaisesRegex(OSError, "simulated second file failure"):
+                a1_bridge.install(
+                    self.sandbox.paths, game, verify_against_upstream=False,
+                    skip_download=True, proc_root=self.EMPTY_PROC, logger=lambda *_: None,
+                )
+        self.assertEqual(self.snapshot(self.sandbox.install_dir), before_game)
+        self.assertEqual(config.read_bytes(), before_config)
+        self.assertEqual(route_state.read_bytes(), before_state)
 
     def test_install_is_refused_without_a_model(self) -> None:
         game = self.sandbox.game()
@@ -415,6 +450,32 @@ class A2InstallTest(InstallTestBase):
         rollback_journal(self.sandbox.paths, result.journal_id)
         self.assertEqual(self.snapshot(self.sandbox.install_dir), before)
 
+    def test_mid_install_failure_restores_game_and_route_state(self) -> None:
+        self._stub_archive()
+        game = self.sandbox.game()
+        self.sandbox.stub_model()
+        route_state = providers.route_state_path(self.sandbox.paths, game.key, "a2")
+        route_state.write_text('{"version": 1, "custom": "keep"}')
+        before_game = self.snapshot(self.sandbox.install_dir)
+        before_state = route_state.read_bytes()
+        original = a2_optiscaler.FileJournal.install_file
+        calls = 0
+
+        def fail_second(journal, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("simulated A2 model failure")
+            return original(journal, *args, **kwargs)
+
+        with mock.patch.object(a2_optiscaler.FileJournal, "install_file", fail_second):
+            with self.assertRaisesRegex(OSError, "simulated A2 model failure"):
+                a2_optiscaler.install(
+                    self.sandbox.paths, game, skip_download=True, logger=lambda *_: None,
+                )
+        self.assertEqual(self.snapshot(self.sandbox.install_dir), before_game)
+        self.assertEqual(route_state.read_bytes(), before_state)
+
     def test_reinstall_reuses_the_recorded_proxy_name(self) -> None:
         self._stub_archive()
         game = self.sandbox.game()
@@ -528,6 +589,174 @@ class InstallJsonContractTest(InstallTestBase):
         self.assertFalse(document["ok"])
         self.assertIn("refused", document)
         self.assertIn("nvngx_dlssnr.dll", document["refused"])
+
+    def test_partial_rollback_blocks_reinstall_until_recovery_finishes(self) -> None:
+        from nvfku.journal import FileJournal
+
+        self.sandbox.stub_model()
+        game = self.sandbox.game()
+        target = self.sandbox.exe_dir / "rollback-conflict.dll"
+        completed = self.sandbox.exe_dir / "rollback-first.dll"
+        journal = FileJournal(self.sandbox.paths, game.install_dir, "a1", game_key=game.key)
+        journal.write_text(target, "INSTALLED")
+        journal.write_text(completed, "INSTALLED")
+        journal.finish()
+        target.write_text("USER EDIT")
+        with mock.patch.dict(os.environ, {"HOME": str(self.sandbox.home),
+                                          "NVFKU_PROC_ROOT": self.EMPTY_PROC}):
+            code, report = self._run_json(
+                "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+            )
+            self.assertEqual(code, 1)
+            self.assertFalse(report["ok"])
+            self.assertFalse(completed.exists())
+            self.assertEqual(target.read_text(), "USER EDIT")
+            before = self.snapshot(game.install_dir)
+            code, refused = self._run_json(
+                *self._args("--yes", "--skip-download", "--no-upstream-verify")
+            )
+            self.assertEqual(code, 2, refused)
+            self.assertIn("Incomplete transaction", refused["refused"])
+            self.assertEqual(self.snapshot(game.install_dir), before)
+            code, backups = self._run_json("--state-dir", str(self.sandbox.state), "backups")
+            self.assertEqual(code, 0)
+            self.assertTrue(backups[0]["rollback_started"])
+            self.assertTrue(backups[0]["finished"])
+            self.assertFalse(backups[0]["rolled_back"])
+            # The user resolves the conflict; retry finishes the same journal.
+            target.write_text("INSTALLED")
+            code, recovered = self._run_json(
+                "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+            )
+            self.assertEqual(code, 0, recovered)
+            self.assertTrue(recovered["ok"])
+            code, installed = self._run_json(
+                *self._args("--yes", "--skip-download", "--no-upstream-verify")
+            )
+            self.assertEqual(code, 0, installed)
+            self.assertTrue(installed["ok"])
+
+    def test_legacy_partial_rollback_is_still_detected_by_backups_and_install(self) -> None:
+        from nvfku.journal import FileJournal
+
+        self.sandbox.stub_model()
+        game = self.sandbox.game()
+        target = self.sandbox.exe_dir / "legacy-remaining.dll"
+        journal = FileJournal(self.sandbox.paths, game.install_dir, "a1", game_key=game.key)
+        journal.write_text(target, "INSTALLED")
+        journal.note("legacy rollback already passed this note")
+        journal.finish()
+        # Seed the persisted format from before rollback_started was introduced.
+        manifest_path = journal.dir / "manifest.json"
+        legacy = json.loads(manifest_path.read_text())
+        legacy.pop("rollback_started")
+        legacy["operations"][-1]["rollback_done"] = True
+        manifest_path.write_text(json.dumps(legacy))
+        with mock.patch.dict(os.environ, {"HOME": str(self.sandbox.home),
+                                          "NVFKU_PROC_ROOT": self.EMPTY_PROC}):
+            code, backups = self._run_json("--state-dir", str(self.sandbox.state), "backups")
+            self.assertEqual(code, 0)
+            self.assertTrue(backups[0]["rollback_started"])
+            code, refused = self._run_json(
+                *self._args("--yes", "--skip-download", "--no-upstream-verify")
+            )
+            self.assertEqual(code, 2, refused)
+            self.assertIn("Incomplete transaction", refused["refused"])
+            self.assertEqual(target.read_text(), "INSTALLED")
+
+    def test_rollback_and_retry_do_not_depend_on_writable_display_index(self) -> None:
+        from nvfku.journal import FileJournal
+
+        game = self.sandbox.game()
+        target = self.sandbox.exe_dir / "index-fault.dll"
+        target.write_text("ORIGINAL")
+        journal = FileJournal(self.sandbox.paths, game.install_dir, "a1", game_key=game.key)
+        journal.write_text(target, "INSTALLED")
+        journal.finish()
+        # Fault injection at the filesystem boundary: an optional display cache
+        # cannot be replaced when its filename is occupied by a directory.
+        index = self.sandbox.paths.backups_root() / "index.json"
+        self.assertEqual(index.resolve().parent, self.sandbox.paths.backups_root().resolve())
+        index.unlink()
+        index.mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(self.sandbox.home)}):
+            code, report = self._run_json(
+                "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+            )
+            self.assertEqual(code, 0, report)
+            self.assertTrue(report["ok"])
+            self.assertEqual(target.read_text(), "ORIGINAL")
+            code, backups = self._run_json("--state-dir", str(self.sandbox.state), "backups")
+            self.assertEqual(code, 0)
+            self.assertTrue(backups[0]["rolled_back"])
+            code, retried = self._run_json(
+                "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+            )
+            self.assertEqual(code, 0, retried)
+            self.assertTrue(retried["ok"])
+            self.assertEqual(target.read_text(), "ORIGINAL")
+
+    def test_retry_retains_successful_undo_after_transient_manifest_write_failure(self) -> None:
+        from nvfku.journal import FileJournal
+
+        game = self.sandbox.game()
+        target = self.sandbox.exe_dir / "checkpoint-fault.dll"
+        target.write_text("ORIGINAL")
+        journal = FileJournal(self.sandbox.paths, game.install_dir, "a1", game_key=game.key)
+        journal.write_text(target, "INSTALLED")
+        journal.finish()
+        real_replace = os.replace
+        manifest_writes = 0
+        def fail_one_checkpoint(source, destination, *args, **kwargs):
+            nonlocal manifest_writes
+            if Path(destination).name == "manifest.json":
+                manifest_writes += 1
+                # Intent is the first write; the successful undo's checkpoint is second.
+                if manifest_writes == 2:
+                    raise OSError("transient acceptance checkpoint fault")
+            return real_replace(source, destination, *args, **kwargs)
+        with mock.patch.dict(os.environ, {"HOME": str(self.sandbox.home)}):
+            # Inject at the filesystem replace boundary, not into journal internals.
+            with mock.patch("nvfku.paths.os.replace", side_effect=fail_one_checkpoint):
+                code, report = self._run_json(
+                    "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+                )
+            self.assertEqual(code, 1, report)
+            self.assertFalse(report["ok"])
+            self.assertEqual(target.read_text(), "ORIGINAL")
+            code, retried = self._run_json(
+                "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+            )
+            self.assertEqual(code, 0, retried)
+            self.assertTrue(retried["ok"])
+            self.assertEqual(target.read_text(), "ORIGINAL")
+
+    def test_rollback_failure_is_nonzero_json_and_can_be_retried(self) -> None:
+        from nvfku.journal import FileJournal, load_journal
+
+        game = self.sandbox.game()
+        destination = self.sandbox.exe_dir / "rollback-test.dll"
+        destination.write_bytes(b"original")
+        source = self.sandbox.root / "replacement.dll"
+        source.write_bytes(b"replacement")
+        journal = FileJournal(self.sandbox.paths, game.install_dir, "a1", game_key=game.key)
+        journal.install_file(source, destination)
+        backup = journal.dir / load_journal(self.sandbox.paths, journal.journal_id).operations[0].backup
+        backup.unlink()
+        code, document = self._run_json(
+            "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+        )
+        self.assertEqual(code, 1)
+        self.assertFalse(document["ok"])
+        self.assertTrue(document["failed"])
+        self.assertEqual(destination.read_bytes(), b"replacement")
+        backup.write_bytes(b"original")
+        code, document = self._run_json(
+            "--state-dir", str(self.sandbox.state), "rollback", journal.journal_id,
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(document["ok"])
+        self.assertEqual(destination.read_bytes(), b"original")
 
     def test_unknown_game_is_a_json_document(self) -> None:
         code, document = self._run_json(

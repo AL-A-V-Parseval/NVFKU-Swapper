@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 
 import 'design.dart';
 import 'engine.dart';
+import 'install_task.dart';
 import 'l10n.dart';
 import 'launch_options.dart';
 import 'models.dart';
@@ -71,11 +72,22 @@ class _GameDetailViewState extends State<GameDetailView> {
   RoutePlan? _detailed;
   String? _error;
   String? _selected;
+  int _requestVersion = 0;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(GameDetailView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.engine, widget.engine) ||
+        !identical(oldWidget.game, widget.game) ||
+        oldWidget.component != widget.component) {
+      _load();
+    }
   }
 
   /// Loads the viability of every route and the detail of one.
@@ -84,6 +96,7 @@ class _GameDetailViewState extends State<GameDetailView> {
   /// all of it in routes the user had not asked to see — so the detail page asks
   /// for the recommended route first and fetches the others only when chosen.
   Future<void> _load({String? route}) async {
+    final request = ++_requestVersion;
     setState(() {
       _plans = null;
       _detailed = null;
@@ -94,16 +107,14 @@ class _GameDetailViewState extends State<GameDetailView> {
       // more than planning the slowest single one — the expensive part is starting
       // Python at all — so looping spawned processes for no gain.
       final summaries = await widget.engine.plan(widget.game.appid);
-      if (!mounted) return;
+      if (!mounted || request != _requestVersion) return;
       if (summaries.isEmpty) {
         setState(() => _error = 'no route could be planned for this game');
         return;
       }
-      final target = route ??
-          summaries
-              .where((p) => p.viable && !p.readOnly)
-              .firstOrNull
-              ?.route ??
+      final target =
+          route ??
+          summaries.where((p) => p.viable && !p.readOnly).firstOrNull?.route ??
           summaries.first.route;
       final detail = summaries.where((p) => p.route == target).firstOrNull;
       setState(() {
@@ -113,7 +124,7 @@ class _GameDetailViewState extends State<GameDetailView> {
       });
       widget.onLoaded?.call();
     } on EngineException catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != _requestVersion) return;
       setState(() => _error = e.message);
     }
   }
@@ -123,22 +134,30 @@ class _GameDetailViewState extends State<GameDetailView> {
   RoutePlan? _componentPlanFor(List<RoutePlan> plans) {
     for (final plan in plans) {
       if (plan.route == widget.component) return plan;
-      if (plan.prerequisite?.route == widget.component) return plan.prerequisite;
+      if (plan.prerequisite?.route == widget.component) {
+        return plan.prerequisite;
+      }
     }
     return null;
   }
 
   Future<void> _select(String route) async {
+    final request = ++_requestVersion;
     setState(() {
       _selected = route;
       _detailed = null;
+      _error = null;
     });
     try {
       final plans = await widget.engine.plan(widget.game.appid, route: route);
-      if (!mounted) return;
-      setState(() => _detailed = plans.firstOrNull);
+      if (!mounted || request != _requestVersion) return;
+      final detail = plans.where((p) => p.route == route).firstOrNull;
+      setState(() {
+        _detailed = detail;
+        if (detail == null) _error = 'No plan was returned for $route.';
+      });
     } on EngineException catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != _requestVersion) return;
       setState(() => _error = e.message);
     }
   }
@@ -213,54 +232,65 @@ class _GameDetailViewState extends State<GameDetailView> {
           ),
         const SizedBox(height: AppSpace.lg),
         Expanded(
-          child: _error != null
-              ? EmptyState(
-                  title: context.t('plan.couldNotPlan'),
-                  body: _error!,
-                  icon: Icons.error_outline,
-                  action: FilledButton.icon(
-                    onPressed: _load,
-                    icon: const Icon(Icons.refresh, size: 17),
-                    label: Text(context.t('common.tryAgain')),
-                  ),
-                )
-              : plans == null
+          child:
+              _error != null
+                  ? EmptyState(
+                    title: context.t('plan.couldNotPlan'),
+                    body: _error!,
+                    icon: Icons.error_outline,
+                    action: FilledButton.icon(
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh, size: 17),
+                      label: Text(context.t('common.tryAgain')),
+                    ),
+                  )
+                  : plans == null
                   ? const Center(child: CircularProgressIndicator())
                   : SingleChildScrollView(
-                      controller: widget.scrollController,
-                      padding: EdgeInsets.fromLTRB(
-                        AppSpace.xl,
-                        widget.embedded ? AppSpace.lg : 0,
-                        AppSpace.xl,
-                        AppSpace.xxl,
-                      ),
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            maxWidth: AppSpace.contentMaxWidth,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _Facts(game: game),
-                              const SizedBox(height: AppSpace.xxl),
-                              // A component's own install panel, reached from the
-                              // "Needs" row under a route. It is deliberately not
-                              // in the route list: it is a step, not an option.
-                              if (widget.component != null)
-                                _InstallSection(
-                                  key: ValueKey(
-                                    'component-${game.appid}-${widget.component}',
-                                  ),
-                                  engine: widget.engine,
-                                  game: game,
-                                  plan: _componentPlanFor(plans)!,
-                                  onChanged: () async {
-                                    await widget.onChanged();
-                                    widget.onComponentDone?.call();
-                                  },
-                                )
-                              else ...[
+                    controller: widget.scrollController,
+                    padding: EdgeInsets.fromLTRB(
+                      AppSpace.xl,
+                      widget.embedded ? AppSpace.lg : 0,
+                      AppSpace.xl,
+                      AppSpace.xxl,
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: AppSpace.contentMaxWidth,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (!game.detectionComplete)
+                              Notice(
+                                title: context.t('games.detectionIncomplete'),
+                                body: context.t(
+                                  'games.detectionIncompleteBody',
+                                ),
+                                mono: game.detectionWarnings.join('\n'),
+                                tone: AppColors.warning(context),
+                                icon: Icons.warning_amber_outlined,
+                              ),
+                            _Facts(game: game),
+                            const SizedBox(height: AppSpace.xxl),
+                            // A component's own install panel, reached from the
+                            // "Needs" row under a route. It is deliberately not
+                            // in the route list: it is a step, not an option.
+                            if (widget.component != null)
+                              _InstallSection(
+                                key: ValueKey(
+                                  'component-${game.appid}-${widget.component}',
+                                ),
+                                engine: widget.engine,
+                                game: game,
+                                plan: _componentPlanFor(plans)!,
+                                onChanged: () async {
+                                  // The Engine notifies the shell and refreshes the library.
+                                  widget.onComponentDone?.call();
+                                },
+                              )
+                            else ...[
                               SectionHeader(
                                 title: context.t('plan.routesTitle'),
                                 subtitle: context.t('plan.routesSubtitle'),
@@ -278,58 +308,59 @@ class _GameDetailViewState extends State<GameDetailView> {
                                   _PrerequisiteRow(
                                     plan: plan.prerequisite!,
                                     parentSelected: plan.route == _selected,
-                                    onInstall: () =>
-                                        widget.onOpenInstall?.call(
-                                      plan.prerequisite!.route,
-                                    ),
+                                    onInstall:
+                                        () => widget.onOpenInstall?.call(
+                                          plan.prerequisite!.route,
+                                        ),
                                   ),
                               ],
                               const SizedBox(height: AppSpace.xl),
                               if (selected == null)
                                 const Padding(
                                   padding: EdgeInsets.all(AppSpace.xl),
-                                  child: Center(child: CircularProgressIndicator()),
+                                  child: Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
                                 )
                               else
                                 _InstallSection(
-                                  key: ValueKey('install-${game.appid}-${selected.route}'),
+                                  key: ValueKey(
+                                    'install-${game.appid}-${selected.route}',
+                                  ),
                                   engine: widget.engine,
                                   game: game,
                                   plan: selected,
-                                  onChanged: () async {
-                                    await widget.onChanged();
-                                    await _load(route: selected.route);
-                                  },
-                                ),
-                              ],
-                              const SizedBox(height: AppSpace.xxl),
-                              Divider(
-                                color: theme.colorScheme.outlineVariant
-                                    .withValues(alpha: 0.5),
-                              ),
-                              const SizedBox(height: AppSpace.xl),
-                              if (game.source == 'folder')
-                                Notice(
-                                  title: 'No Steam launch options for this game',
-                                  body: 'It was added by hand, so Steam has no appid to '
-                                      'attach options to. Set the environment variables in '
-                                      'whatever launches it.',
-                                  tone: AppColors.warning(context),
-                                  icon: Icons.info_outline,
-                                )
-                              else
-                                LaunchOptionsPanel(
-                                  engine: widget.engine,
-                                  gameKey: game.appid,
-                                  gameName: game.name,
-                                  routeValue: selected?.launchOptions,
-                                  routeLabel: selected?.title ?? '',
                                 ),
                             ],
-                          ),
+                            const SizedBox(height: AppSpace.xxl),
+                            Divider(
+                              color: theme.colorScheme.outlineVariant
+                                  .withValues(alpha: 0.5),
+                            ),
+                            const SizedBox(height: AppSpace.xl),
+                            if (game.source == 'folder')
+                              Notice(
+                                title: 'No Steam launch options for this game',
+                                body:
+                                    'It was added by hand, so Steam has no appid to '
+                                    'attach options to. Set the environment variables in '
+                                    'whatever launches it.',
+                                tone: AppColors.warning(context),
+                                icon: Icons.info_outline,
+                              )
+                            else
+                              LaunchOptionsPanel(
+                                engine: widget.engine,
+                                gameKey: game.appid,
+                                gameName: game.name,
+                                routeValue: selected?.launchOptions,
+                                routeLabel: selected?.title ?? '',
+                              ),
+                          ],
                         ),
                       ),
                     ),
+                  ),
         ),
       ],
     );
@@ -359,11 +390,18 @@ class _Facts extends StatelessWidget {
               Text(context.t('plan.thisGame'), style: AppText.title),
               const SizedBox(width: AppSpace.sm),
               if (game.source == 'folder')
-                StatusPill(label: context.t('games.addedByHand'), tone: AppColors.accent(context)),
+                StatusPill(
+                  label: context.t('games.addedByHand'),
+                  tone: AppColors.accent(context),
+                ),
             ],
           ),
           const SizedBox(height: AppSpace.md),
-          FieldRow(label: context.t('plan.appid'), value: game.appid, mono: true),
+          FieldRow(
+            label: context.t('plan.appid'),
+            value: game.appid,
+            mono: true,
+          ),
           FieldRow(
             label: context.t('plan.renderingApi'),
             value: api,
@@ -373,28 +411,40 @@ class _Facts extends StatelessWidget {
             label: context.t('plan.bitness'),
             value: game.bitness == null ? 'unknown' : '${game.bitness}-bit',
           ),
-          FieldRow(label: context.t('plan.launchExe'), value: game.exeName, mono: true),
+          FieldRow(
+            label: context.t('plan.launchExe'),
+            value: game.exeName,
+            mono: true,
+          ),
           FieldRow(
             label: context.t('plan.protonTool'),
             value: game.protonTool ?? context.t('plan.noPrefix'),
-            valueColour: game.protonTool == null ? AppColors.warning(context) : null,
+            valueColour:
+                game.protonTool == null ? AppColors.warning(context) : null,
           ),
           FieldRow(
             label: context.t('plan.nativeDlss'),
-            value: game.nativeDlss.isEmpty
-                ? context.t('plan.none')
-                : game.nativeDlss.map((p) => p.split('/').last).toSet().join(', '),
+            value:
+                game.nativeDlss.isEmpty
+                    ? context.t('plan.none')
+                    : game.nativeDlss
+                        .map((p) => p.split('/').last)
+                        .toSet()
+                        .join(', '),
           ),
           FieldRow(
             label: context.t('plan.nrModel'),
             value: game.nrModelLabel(Localizations.localeOf(context)),
-            valueColour: game.hasNrModel
-                ? AppColors.success(context)
-                : AppColors.warning(context),
+            valueColour:
+                game.hasNrModel
+                    ? AppColors.success(context)
+                    : AppColors.warning(context),
           ),
           FieldRow(
             label: context.t('plan.reshade'),
-            value: context.t(game.hasReshade ? 'plan.reshadeInstalled' : 'plan.reshadeNot'),
+            value: context.t(
+              game.hasReshade ? 'plan.reshadeInstalled' : 'plan.reshadeNot',
+            ),
             valueColour: game.hasReshade ? null : AppColors.warning(context),
           ),
           if (game.apiEvidence.isNotEmpty) ...[
@@ -445,12 +495,14 @@ class _RouteCardState extends State<_RouteCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final plan = widget.plan;
-    final verdictKey = plan.readOnly
-        ? 'plan.probe'
-        : (plan.viable ? 'common.viable' : 'plan.blocked');
-    final tone = plan.readOnly
-        ? theme.colorScheme.onSurfaceVariant
-        : plan.viable
+    final verdictKey =
+        plan.readOnly
+            ? 'plan.probe'
+            : (plan.viable ? 'common.viable' : 'plan.blocked');
+    final tone =
+        plan.readOnly
+            ? theme.colorScheme.onSurfaceVariant
+            : plan.viable
             ? AppColors.success(context)
             : AppColors.danger(context);
 
@@ -469,15 +521,19 @@ class _RouteCardState extends State<_RouteCard> {
             padding: const EdgeInsets.all(AppSpace.lg),
             decoration: BoxDecoration(
               // Selection reads as a ring plus a tonal step, not colour alone.
-              color: widget.selected
-                  ? theme.colorScheme.primary.withValues(alpha: 0.07)
-                  : _hover
+              color:
+                  widget.selected
+                      ? theme.colorScheme.primary.withValues(alpha: 0.07)
+                      : _hover
                       ? theme.colorScheme.onSurface.withValues(alpha: 0.03)
                       : Colors.transparent,
               border: Border.all(
-                color: widget.selected
-                    ? theme.colorScheme.primary.withValues(alpha: 0.55)
-                    : theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+                color:
+                    widget.selected
+                        ? theme.colorScheme.primary.withValues(alpha: 0.55)
+                        : theme.colorScheme.outlineVariant.withValues(
+                          alpha: 0.5,
+                        ),
                 width: widget.selected ? 1.5 : 1,
               ),
               borderRadius: BorderRadius.circular(AppSpace.radiusLarge),
@@ -573,19 +629,19 @@ class _RouteDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GestureDetector(
-        // Swallow the tap so opening the disclosure does not also switch route.
-        onTap: () {},
-        child: Disclosure(
-          dense: true,
-          label: context.t('plan.technicalDetail'),
-          child: Text(
-            detail,
-            style: AppText.caption.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
+    // Swallow the tap so opening the disclosure does not also switch route.
+    onTap: () {},
+    child: Disclosure(
+      dense: true,
+      label: context.t('plan.technicalDetail'),
+      child: Text(
+        detail,
+        style: AppText.caption.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
-      );
+      ),
+    ),
+  );
 }
 
 /// Plan, apply, live progress, undo. One section, always in the same order.
@@ -595,23 +651,21 @@ class _InstallSection extends StatefulWidget {
     required this.engine,
     required this.game,
     required this.plan,
-    required this.onChanged,
+    this.onChanged,
   });
 
   final Engine engine;
   final Game game;
   final RoutePlan plan;
-  final Future<void> Function() onChanged;
+  final Future<void> Function()? onChanged;
 
   @override
   State<_InstallSection> createState() => _InstallSectionState();
 }
 
 class _InstallSectionState extends State<_InstallSection> {
-  StreamSubscription<InstallEvent>? _subscription;
-  InstallResult? _result;
-  String? _refusal;
-  bool _running = false;
+  late InstallTask _task;
+  int _seenCompletion = 0;
 
   /// Live Steam state. The plan reports it once, but Steam can be closed while the
   /// sheet is open — and closing it is exactly what the gate is asking for — so the
@@ -619,18 +673,29 @@ class _InstallSectionState extends State<_InstallSection> {
   LaunchOptionsState? _steam;
   Timer? _steamPoll;
   bool _steamDialogShown = false;
-  final List<String> _progress = [];
+
+  void _taskChanged() {
+    if (!mounted) return;
+    if (_task.result != null && _seenCompletion != _task.completion) {
+      _seenCompletion = _task.completion;
+      widget.onChanged?.call();
+    }
+    setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
+    _task = widget.engine.installationFor(widget.game.appid, widget.plan.route);
+    _seenCompletion = _task.completion;
+    _task.addListener(_taskChanged);
     _refreshSteam();
   }
 
   @override
   void dispose() {
     _steamPoll?.cancel();
-    _subscription?.cancel();
+    _task.removeListener(_taskChanged);
     super.dispose();
   }
 
@@ -671,65 +736,39 @@ class _InstallSectionState extends State<_InstallSection> {
   Future<void> _showSteamWarning() async {
     final proceed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        icon: Icon(Icons.pause_circle_outline, color: AppColors.warning(context)),
-        title: Text(context.t('plan.steamTitle')),
-        content: Text(context.t('plan.steamBody')),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(context.t('plan.steamWait')),
+      builder:
+          (context) => AlertDialog(
+            icon: Icon(
+              Icons.pause_circle_outline,
+              color: AppColors.warning(context),
+            ),
+            title: Text(context.t('plan.steamTitle')),
+            content: Text(context.t('plan.steamBody')),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(context.t('plan.steamWait')),
+              ),
+            ],
           ),
-        ],
-      ),
     );
     // There is no "install anyway": Steam would revert the write, so the only
     // honest action is to wait.
     if (proceed == true) await _refreshSteam();
   }
 
-  Future<void> _install() async {
-    setState(() {
-      _running = true;
-      _refusal = null;
-      _result = null;
-      _progress.clear();
-    });
-    _subscription = widget.engine
-        .install(
-      gameKey: widget.game.appid,
-      route: widget.plan.route,
-      workingScale: widget.plan.route == 'a2' ? _workingScale : null,
-    )
-        .listen(
-      (event) {
-        if (!mounted) return;
-        switch (event.phase) {
-          case 'log':
-            setState(() => _progress.add(event.message));
-          case 'done':
-            setState(() {
-              _running = false;
-              _result = event.result;
-            });
-            widget.onChanged();
-          case 'failed':
-            setState(() {
-              _running = false;
-              _refusal = event.message;
-            });
-          default:
-            break;
-        }
-      },
-      onError: (Object error) {
-        if (!mounted) return;
-        setState(() {
-          _running = false;
-          _refusal = error.toString();
-        });
-      },
-    );
+  void _install() {
+    try {
+      widget.engine.startInstallation(
+        gameKey: widget.game.appid,
+        route: widget.plan.route,
+        workingScale: widget.plan.route == 'a2' ? _workingScale : null,
+      );
+    } on EngineException catch (error) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    }
   }
 
   int _workingScale = 100;
@@ -750,10 +789,15 @@ class _InstallSectionState extends State<_InstallSection> {
         children: [
           SectionHeader(
             title: context.t('plan.planTitle'),
-            subtitle: context.t(plan.readOnly ? 'plan.planReadOnly' : 'plan.planSubtitle'),
+            subtitle: context.t(
+              plan.readOnly ? 'plan.planReadOnly' : 'plan.planSubtitle',
+            ),
             trailing: StatusPill(
               label: context.t(plan.viable ? 'plan.ready' : 'plan.blocked'),
-              tone: plan.viable ? AppColors.success(context) : AppColors.danger(context),
+              tone:
+                  plan.viable
+                      ? AppColors.success(context)
+                      : AppColors.danger(context),
             ),
           ),
           // What the engine inspected and would change. Folded away by default:
@@ -770,9 +814,10 @@ class _InstallSectionState extends State<_InstallSection> {
               icon: plan.viable ? null : Icons.error_outline,
               initiallyOpen: !plan.viable,
               label: context.t('plan.developerDetail'),
-              hint: plan.viable
-                  ? context.t('plan.developerDetailHint')
-                  : plan.blockers.isEmpty
+              hint:
+                  plan.viable
+                      ? context.t('plan.developerDetailHint')
+                      : plan.blockers.isEmpty
                       ? null
                       : '${plan.blockers.length}',
               child: Column(
@@ -788,7 +833,8 @@ class _InstallSectionState extends State<_InstallSection> {
                       ),
                     ),
                     const SizedBox(height: AppSpace.sm),
-                    for (final action in plan.actions) _PlanAction(action: action),
+                    for (final action in plan.actions)
+                      _PlanAction(action: action),
                   ],
                 ],
               ),
@@ -799,7 +845,9 @@ class _InstallSectionState extends State<_InstallSection> {
             const SizedBox(height: AppSpace.md),
             Text(
               context.t('plan.filesYouSupply'),
-              style: AppText.label.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: AppText.label.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: AppSpace.sm),
             for (final missing in plan.missing) _MissingBlock(missing: missing),
@@ -809,7 +857,9 @@ class _InstallSectionState extends State<_InstallSection> {
             const SizedBox(height: AppSpace.md),
             Text(
               context.t('plan.launchNeeded'),
-              style: AppText.label.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: AppText.label.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: AppSpace.xs),
             Container(
@@ -837,9 +887,10 @@ class _InstallSectionState extends State<_InstallSection> {
                     max: 100,
                     divisions: 15,
                     label: '$_workingScale%',
-                    onChanged: _running
-                        ? null
-                        : (v) => setState(() => _workingScale = v.round()),
+                    onChanged:
+                        _task.running
+                            ? null
+                            : (v) => setState(() => _workingScale = v.round()),
                   ),
                 ),
                 Text('$_workingScale%', style: AppText.mono),
@@ -858,7 +909,7 @@ class _InstallSectionState extends State<_InstallSection> {
           // An install prints one line per component, so leaving all of them on
           // screen buries the button under a transcript. The live line is what a
           // user watches; the rest is what they read afterwards, if ever.
-          if (_running || _progress.isNotEmpty) ...[
+          if (_task.running || _task.progress.isNotEmpty) ...[
             const SizedBox(height: AppSpace.md),
             Container(
               width: double.infinity,
@@ -872,7 +923,7 @@ class _InstallSectionState extends State<_InstallSection> {
                 children: [
                   Row(
                     children: [
-                      if (_running)
+                      if (_task.running)
                         const Padding(
                           padding: EdgeInsets.only(right: AppSpace.sm),
                           child: SizedBox(
@@ -885,17 +936,22 @@ class _InstallSectionState extends State<_InstallSection> {
                         Padding(
                           padding: const EdgeInsets.only(right: AppSpace.sm),
                           child: Icon(
-                            Icons.check_circle_outline,
+                            _task.error == null
+                                ? Icons.check_circle_outline
+                                : Icons.error_outline,
                             size: 13,
-                            color: AppColors.success(context),
+                            color:
+                                _task.error == null
+                                    ? AppColors.success(context)
+                                    : AppColors.danger(context),
                           ),
                         ),
                       Expanded(
                         child: Text(
-                          _running
-                              ? (_progress.isEmpty
+                          _task.running
+                              ? (_task.progress.isEmpty
                                   ? context.t('common.working')
-                                  : _progress.last)
+                                  : _task.progress.last)
                               : context.t('common.lastRun'),
                           style: AppText.caption.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
@@ -906,7 +962,7 @@ class _InstallSectionState extends State<_InstallSection> {
                       ),
                     ],
                   ),
-                  if (_progress.length > 1) ...[
+                  if (_task.progress.length > 1) ...[
                     const SizedBox(height: AppSpace.sm),
                     Disclosure(
                       dense: true,
@@ -915,7 +971,7 @@ class _InstallSectionState extends State<_InstallSection> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          for (final line in _progress)
+                          for (final line in _task.progress)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 2),
                               child: SelectableText(line, style: AppText.mono),
@@ -944,7 +1000,7 @@ class _InstallSectionState extends State<_InstallSection> {
                   dense: true,
                   label: context.t('plan.steamRecheck'),
                   icon: Icons.refresh,
-                  busy: _running,
+                  busy: _task.running,
                   onPressed: _refreshSteam,
                 ),
               ],
@@ -956,26 +1012,34 @@ class _InstallSectionState extends State<_InstallSection> {
             children: [
               HoldButton(
                 emphasized: true,
-                label: context.t(plan.readOnly
-                    ? 'plan.nothingToInstall'
-                    : (_running
-                        ? 'common.installing'
-                        : (_steam?.steamRunning == true
-                            ? 'plan.steamBlocked'
-                            : 'plan.confirm'))),
+                label: context.t(
+                  plan.readOnly
+                      ? 'plan.nothingToInstall'
+                      : (_task.running
+                          ? 'common.installing'
+                          : (_steam?.steamRunning == true
+                              ? 'plan.steamBlocked'
+                              : 'plan.confirm')),
+                ),
                 icon: plan.readOnly ? Icons.info_outline : Icons.download,
-                busy: _running,
-                onPressed: plan.viable &&
-                        !plan.readOnly &&
-                        !_running &&
-                        _steam?.steamRunning != true
-                    ? _install
-                    : null,
-                tooltip: context.t(plan.readOnly
-                    ? 'plan.probeTip'
-                    : (_steam?.steamRunning == true
-                        ? 'plan.steamBlockedTip'
-                        : (plan.viable ? 'plan.confirmTip' : 'plan.resolveFirst'))),
+                busy: _task.running,
+                onPressed:
+                    plan.viable &&
+                            !plan.readOnly &&
+                            !_task.running &&
+                            (_steam != null || widget.game.source != 'steam') &&
+                            _steam?.steamRunning != true
+                        ? _install
+                        : null,
+                tooltip: context.t(
+                  plan.readOnly
+                      ? 'plan.probeTip'
+                      : (_steam?.steamRunning == true
+                          ? 'plan.steamBlockedTip'
+                          : (plan.viable
+                              ? 'plan.confirmTip'
+                              : 'plan.resolveFirst')),
+                ),
               ),
             ],
           ),
@@ -985,25 +1049,28 @@ class _InstallSectionState extends State<_InstallSection> {
             const SizedBox(height: AppSpace.md),
             FieldRow(
               label: context.t('plan.launchOptionsCurrent'),
-              value: _steam!.hasValue ? _steam!.launchOptions! : context.t('plan.none'),
+              value:
+                  _steam!.hasValue
+                      ? _steam!.launchOptions!
+                      : context.t('plan.none'),
               mono: true,
               valueColour: _steam!.hasValue ? null : AppColors.warning(context),
             ),
           ],
 
-          if (_refusal != null) ...[
+          if (_task.error != null) ...[
             const SizedBox(height: AppSpace.md),
             Notice(
               title: context.t('plan.refusedTitle'),
-              mono: _refusal,
+              mono: _task.error,
               tone: AppColors.danger(context),
               icon: Icons.block,
             ),
           ],
 
-          if (_result != null) ...[
+          if (_task.result != null) ...[
             const SizedBox(height: AppSpace.md),
-            _InstallResultBlock(result: _result!),
+            _InstallResultBlock(result: _task.result!),
           ],
         ],
       ),
@@ -1031,21 +1098,33 @@ class _InstallResultBlock extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.check_circle_outline, size: 17, color: AppColors.success(context)),
+              Icon(
+                Icons.check_circle_outline,
+                size: 17,
+                color: AppColors.success(context),
+              ),
               const SizedBox(width: AppSpace.sm),
               Text(context.t('common.installed'), style: AppText.subtitle),
             ],
           ),
           const SizedBox(height: AppSpace.md),
           if (result.journalId != null)
-            FieldRow(label: context.t('common.journal'), value: result.journalId!, mono: true),
+            FieldRow(
+              label: context.t('common.journal'),
+              value: result.journalId!,
+              mono: true,
+            ),
           for (final line in result.verified)
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpace.xs),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.verified_outlined, size: 14, color: AppColors.success(context)),
+                  Icon(
+                    Icons.verified_outlined,
+                    size: 14,
+                    color: AppColors.success(context),
+                  ),
                   const SizedBox(width: AppSpace.sm),
                   Expanded(child: Text(line, style: AppText.body)),
                 ],
@@ -1057,7 +1136,11 @@ class _InstallResultBlock extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.warning_amber_outlined, size: 14, color: AppColors.warning(context)),
+                  Icon(
+                    Icons.warning_amber_outlined,
+                    size: 14,
+                    color: AppColors.warning(context),
+                  ),
                   const SizedBox(width: AppSpace.sm),
                   Expanded(child: Text(line, style: AppText.body)),
                 ],
@@ -1077,7 +1160,9 @@ class _InstallResultBlock extends StatelessWidget {
             const SizedBox(height: AppSpace.md),
             Text(
               context.t('common.stillOnYou'),
-              style: AppText.label.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: AppText.label.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: AppSpace.xs),
             for (final step in result.manualSteps)
@@ -1095,7 +1180,10 @@ class _InstallResultBlock extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 2),
-            SelectableText('nvfku rollback ${result.journalId}', style: AppText.mono),
+            SelectableText(
+              'nvfku rollback ${result.journalId}',
+              style: AppText.mono,
+            ),
           ],
         ],
       ),
@@ -1219,9 +1307,10 @@ class _MissingBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tone = missing.blocking
-        ? AppColors.danger(context)
-        : AppColors.warning(context);
+    final tone =
+        missing.blocking
+            ? AppColors.danger(context)
+            : AppColors.warning(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpace.sm),
       child: Notice(
@@ -1269,9 +1358,10 @@ class _PrerequisiteRow extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppSpace.radius),
           border: Border(
             left: BorderSide(
-              color: parentSelected
-                  ? theme.colorScheme.primary
-                  : AppColors.stroke(context),
+              color:
+                  parentSelected
+                      ? theme.colorScheme.primary
+                      : AppColors.stroke(context),
               width: 2,
             ),
           ),
@@ -1316,7 +1406,10 @@ class _PrerequisiteRow extends StatelessWidget {
             const SizedBox(width: AppSpace.md),
             StatusPill(
               label: context.t(plan.viable ? 'plan.ready' : 'plan.blocked'),
-              tone: plan.viable ? AppColors.success(context) : AppColors.danger(context),
+              tone:
+                  plan.viable
+                      ? AppColors.success(context)
+                      : AppColors.danger(context),
             ),
             const SizedBox(width: AppSpace.sm),
             HoldButton(

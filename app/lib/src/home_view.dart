@@ -15,6 +15,8 @@
 /// is a real recorded operation rather than a message.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'cover.dart';
@@ -33,8 +35,12 @@ String relativeTime(BuildContext context, double? seconds) {
   final at = DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round());
   final delta = DateTime.now().difference(at);
   if (delta.inMinutes < 1) return context.t('home.justNow');
-  if (delta.inMinutes < 60) return context.t('home.minAgo', {'n': delta.inMinutes});
-  if (delta.inHours < 24) return context.t('home.hourAgo', {'n': delta.inHours});
+  if (delta.inMinutes < 60) {
+    return context.t('home.minAgo', {'n': delta.inMinutes});
+  }
+  if (delta.inHours < 24) {
+    return context.t('home.hourAgo', {'n': delta.inHours});
+  }
   return context.t('home.dayAgo', {'n': delta.inDays});
 }
 
@@ -66,20 +72,44 @@ class HomeView extends StatefulWidget {
 class _HomeViewState extends State<HomeView> {
   List<JournalEntry>? _journals;
   String? _error;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    widget.engine.revision.addListener(_stateChanged);
     _load();
   }
 
+  void _stateChanged() => unawaited(_load());
+
+  @override
+  void didUpdateWidget(HomeView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.engine, widget.engine)) {
+      oldWidget.engine.revision.removeListener(_stateChanged);
+      widget.engine.revision.addListener(_stateChanged);
+      unawaited(_load());
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.engine.revision.removeListener(_stateChanged);
+    super.dispose();
+  }
+
   Future<void> _load() async {
+    final request = ++_loadGeneration;
     try {
       final journals = await widget.engine.backups();
-      if (!mounted) return;
-      setState(() => _journals = journals);
+      if (!mounted || request != _loadGeneration) return;
+      setState(() {
+        _journals = journals;
+        _error = null;
+      });
     } on EngineException catch (error) {
-      if (!mounted) return;
+      if (!mounted || request != _loadGeneration) return;
       setState(() => _error = error.message);
     }
   }
@@ -209,72 +239,81 @@ class _DropZoneState extends State<DropZone> {
           if (mounted) setState(() => _error = error.message);
         }
       },
-      builder: (context, candidate, rejected) => AnimatedContainer(
-        duration: AppMotion.resolve(context, AppMotion.fast),
-        curve: AppMotion.settle,
-        padding: const EdgeInsets.symmetric(vertical: AppSpace.xxl),
-        decoration: BoxDecoration(
-          color: over
-              ? AppColors.accentSoft(context)
-              : AppColors.card(context).withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(AppSpace.radiusLarge),
-          border: Border.all(
-            color: over
-                ? AppColors.accentGreen
-                : AppColors.stroke(context).withValues(alpha: 0.7),
-            width: over ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          children: [
-            Container(
-              width: 84,
-              height: 84,
-              decoration: BoxDecoration(
-                color: AppColors.accentSoft(context),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.create_new_folder_outlined,
-                size: 38,
-                color: AppColors.accentGreen,
+      builder:
+          (context, candidate, rejected) => AnimatedContainer(
+            duration: AppMotion.resolve(context, AppMotion.fast),
+            curve: AppMotion.settle,
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              vertical: AppSpace.xxl,
+              horizontal: AppSpace.xl,
+            ),
+            decoration: BoxDecoration(
+              color:
+                  over
+                      ? AppColors.accentSoft(context)
+                      : AppColors.card(context).withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(AppSpace.radiusLarge),
+              border: Border.all(
+                color:
+                    over
+                        ? AppColors.accentGreen
+                        : AppColors.stroke(context).withValues(alpha: 0.7),
+                width: over ? 2 : 1,
               ),
             ),
-            const SizedBox(height: AppSpace.lg),
-            Text(
-              context.t('home.dropTitle'),
-              style: AppText.subtitle,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppSpace.xs),
-            Text(
-              context.t('home.dropHint'),
-              style: AppText.caption.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppSpace.lg),
-            HoldButton(
-              label: context.t('home.browse'),
-              icon: Icons.folder_open,
-              onPressed: () => widget.onBrowse(),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: AppSpace.md),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl),
-                child: Notice(
-                  title: context.t('games.dropFailedTitle'),
-                  mono: _error,
-                  tone: AppColors.warning(context),
-                  icon: Icons.info_outline,
+            child: Column(
+              children: [
+                Container(
+                  width: 84,
+                  height: 84,
+                  decoration: BoxDecoration(
+                    color: AppColors.accentSoft(context),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.create_new_folder_outlined,
+                    size: 38,
+                    color: AppColors.accentGreen,
+                  ),
                 ),
-              ),
-            ],
-          ],
-        ),
-      ),
+                const SizedBox(height: AppSpace.lg),
+                Text(
+                  context.t('home.dropTitle'),
+                  style: AppText.subtitle,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: AppSpace.xs),
+                Text(
+                  context.t('home.dropHint'),
+                  style: AppText.caption.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: AppSpace.lg),
+                HoldButton(
+                  label: context.t('home.browse'),
+                  icon: Icons.folder_open,
+                  onPressed: () => widget.onBrowse(),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: AppSpace.md),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.xl,
+                    ),
+                    child: Notice(
+                      title: context.t('games.dropFailedTitle'),
+                      mono: _error,
+                      tone: AppColors.warning(context),
+                      icon: Icons.info_outline,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
     );
   }
 }
@@ -377,19 +416,24 @@ class _RecentCard extends StatelessWidget {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: entry.rolledBack
-                            ? theme.colorScheme.onSurfaceVariant
-                            : AppColors.accentGreen,
+                        color:
+                            entry.rolledBack
+                                ? theme.colorScheme.onSurfaceVariant
+                                : entry.live
+                                ? AppColors.accentGreen
+                                : AppColors.warning(context),
                         shape: BoxShape.circle,
-                        boxShadow: entry.rolledBack
-                            ? null
-                            : [
-                                BoxShadow(
-                                  color: AppColors.accentGreen
-                                      .withValues(alpha: 0.6),
-                                  blurRadius: 8,
-                                ),
-                              ],
+                        boxShadow:
+                            !entry.live
+                                ? null
+                                : [
+                                  BoxShadow(
+                                    color: AppColors.accentGreen.withValues(
+                                      alpha: 0.6,
+                                    ),
+                                    blurRadius: 8,
+                                  ),
+                                ],
                       ),
                     ),
                   ),
@@ -448,9 +492,12 @@ class _ActivityLog extends StatelessWidget {
                     width: 5,
                     height: 5,
                     decoration: BoxDecoration(
-                      color: entry.rolledBack
-                          ? theme.colorScheme.onSurfaceVariant
-                          : AppColors.accentGreen,
+                      color:
+                          entry.rolledBack
+                              ? theme.colorScheme.onSurfaceVariant
+                              : entry.live
+                              ? AppColors.accentGreen
+                              : AppColors.warning(context),
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -475,7 +522,11 @@ class _ActivityLog extends StatelessWidget {
                   const SizedBox(width: AppSpace.md),
                   Text(
                     context.t(
-                      entry.rolledBack ? 'home.stateRolledBack' : 'home.stateLive',
+                      entry.rolledBack
+                          ? 'home.stateRolledBack'
+                          : entry.live
+                          ? 'home.stateLive'
+                          : 'home.stateIncomplete',
                     ),
                     style: AppText.caption.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,

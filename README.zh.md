@@ -21,6 +21,10 @@
 | 在 Linux 上 ReShade 的代理描述符必须保持原生（`unwrap=0`），与 Windows 的默认值相反 | 桥接的配置就是天真移植会崩溃的地方 |
 | 双系统机器上的游戏目录里常常已经有那个私有模型 | 先发现并按摘要分类，只有在找不到可用副本时才下载 |
 
+## 最新版本
+
+[v0.1.1](https://github.com/AL-A-V-Parseval/NVFKU-Swapper/releases/tag/v0.1.1) 修复导航与布局，并包含回滚、缓存完整性、设置与扫描改进。验证范围和兼容性限制见[发布说明](docs/releases/v0.1.1.md)。
+
 ## 目录结构
 
 ```
@@ -38,7 +42,7 @@ engine/                 纯 Python，只用标准库，不依赖 GUI
       a1_bridge.py      ReShade + dlss5-bridge + addon-dlssnr-linux
       a2_optiscaler.py  OptiScaler DLSS-NR（DLL 代理）
     __main__.py         命令行
-  tests/                232 项测试，标准库 unittest
+  tests/                隔离回归测试，标准库 unittest
 app/                    Flutter 界面（只用 Flutter SDK，无第三方包）
 tools/env.sh            隔离：项目 venv + 钉定的 SDK + 本地 pub 缓存
 tools/install_desktop.py  为源码目录创建菜单入口，写入用户级 XDG 目录
@@ -54,7 +58,7 @@ nvfku scan                 # 引擎命令行
 flutter build linux        # 界面
 ```
 
-一切都放在三处之一，全都在仓库目录之外：
+工具链缓存放在被 Git 忽略的项目目录或用户本地目录中，引擎状态单独保存：
 
 | 什么 | 在哪 | 为什么放那 |
 | --- | --- | --- |
@@ -162,8 +166,7 @@ Vulkan layer 路线是刻意缺席的；见开头的约束。这里也没有 Ope
 
 ## 状态
 
-**232 项测试，全部通过。** 已在开发机的真实 Steam 库上验证可用（20 个游戏，
-9 个运行时条目被过滤掉）：
+Python 与 Flutter 自动化回归覆盖隔离文件系统和界面行为；检查命令与发布门槛见[验证流程](docs/release-workflow.md)。此前检查过开发机 Steam 库（20 个游戏、9 个运行时条目被过滤），这不等于跨发行版兼容或真实游戏渲染认证。
 
 - 跨多个库的 Steam 发现，Proton 前缀与工具解析（能区分
   `CachyOS-10.1000-200` 与 `11.0-100`，启动项也随之不同：自定义构建用
@@ -173,7 +176,7 @@ Vulkan layer 路线是刻意缺席的；见开头的约束。这里也没有 Ope
   `Phoenix/Binaries/Win64/` 下同时有 0.3 MB 的启动器和 429 MB 的渲染器；ACC 的
   渲染器在 `AC2/Binaries/Win64/` 下
 - DLSS NR 模型的发现，并按摘要与实测 build 对照分类
-- **A1 与 A2 真实安装**，有日志，回滚在测试中逐字节验证（含符号链接保真与多级
+- A1 与 A2 执行有日志的写入；隔离 fixture 逐字节验证回滚（含符号链接保真与多级
   `mkdir` 链）
 - 组件获取带指数退避、钉定大小，以及可选的、对照发布方 `SHA256SUMS` 的校验
 
@@ -259,23 +262,19 @@ docs/ui-design.md        这些设计决策，写在控件之前
 
 本项目自身的代码以 **WTFPL** 发布。见 [LICENSE](LICENSE)。
 
-**这只覆盖本项目自己的代码。** 发布包里携带的文件中有一个属于 NVIDIA，另有若干组件
-是在安装时从各自的发布页获取、遵循各自的许可。
+**这只覆盖本项目自己的代码。** 标准发布包不含 NVIDIA 模型，用户另行获取或发现本地副本；其他组件在安装时从各自发布页获取，遵循各自许可。
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 完整列出了它们，简述如下：
 
 | | 如何到达你这里 | 它的许可 |
 |---|---|---|
 | 本项目的引擎与界面 | 源码中 | WTFPL |
-| `nvngx_dlssnr.dll`（DLSS NR 模型） | **在发布包里**，已校验摘要 | NVIDIA 私有 |
+| `nvngx_dlssnr.dll`（DLSS NR 模型） | 另行发现或获取并校验摘要，不在标准发布包中 | NVIDIA 私有 |
 | `dlss5-bridge` | 安装时从发布方获取 | MIT |
 | `addon-dlssnr-linux`、`OptiScaler` | 安装时从发布方获取 | GPL-3.0 |
 | ReShade 6.8.0 | 安装时从 reshade.me 获取 | BSD 3-Clause |
 | Flutter 运行时 | 在发布包里 | BSD 3-Clause |
 
-**模型是本项目唯一一个没有许可却仍在分发的文件。** 它没有官方下载：DLSS SDK 只提供
-头文件和导入库，而 Linux 驱动根本不带 NR 模型。所以发布包会把它打进去，而不是让每个
-用户自己去手找 158 MiB——摘要记录在 `RELEASE.json` 中，并由 `tools/package.py` 在
-打包前校验。完整的推理与替代方案见 [docs/weights.md](docs/weights.md)。
+**标准发布包排除私有模型。** 项目记录了实测摘要和社区来源，但摘要校验不赋予再分发权。私有 tar/AppImage 构建与公开发布流程分开；背景和替代方案见[模型来源说明](docs/weights.md)。
 
 GPL-3.0 组件是**独立的程序**，从各自的发布页获取，作为数据文件放到游戏旁边。这里没有
 任何东西链接它们，也没有任何 GPL 源码被编译进或导入本项目，所以它们的 copyleft 不延伸
@@ -295,7 +294,7 @@ python3 tools/package.py           # 三种格式一起产出到 dist/
 | `.deb` | 9.5 MiB | **从不** |
 | `.AppImage` | 9.6 MiB | 否 |
 
-三种格式，旁边还有一份 `SHA256SUMS`。
+三种格式及校验清单。候选文件名包含独立构建身份，不会静默覆盖旧产物；各发布清单记录源代码 revision、dirty 指纹与实测运行时约束。长期维护的产物检查入口和剩余人工验收见[构建与验证流程](docs/release-workflow.md)。
 
 **三种都不含 `nvngx_dlssnr.dll`。** 它 158 MiB，属于 NVIDIA，且没有任何许可允许再
 分发——所以携带它的包会是 119 MiB，而且不可分发。每种格式都在首次使用时获取并校验它：
@@ -307,8 +306,7 @@ nvfku model --mirror-sync
 工具会在真正要紧的时刻说明这一点（`RELEASE.json` 记录了它，plan 也把这次获取作为
 一个动作列出），而不是在之后用一个"文件缺失"的错误失败。
 
-`--with-model` 用于私有构建时把它打进去。它**拒绝与 `--format deb` 组合**，因为那正是
-会造成真正麻烦的组合：一个携带 NVIDIA 私有二进制的 `.deb` 会被任何 Debian 仓库拒绝。
+`--with-model` 仅用于私有 tar 或 AppImage 构建；它**同时拒绝 `--format deb` 和 `--format all`**，且在生成任何产物前拒绝。直接调用 Debian 构建入口也遵守该规则。
 
 `.deb` 由 `tools/package.py` 直接组装——本机装不了 `dpkg-deb`。一个 `.deb` 就是一个
 包含 `debian-binary`、`control.tar.gz` 和 `data.tar.gz` 的 `ar` 归档，而这三种格式

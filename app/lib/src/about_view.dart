@@ -37,10 +37,12 @@ class AboutView extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              Wrap(
+                spacing: AppSpace.md,
+                runSpacing: AppSpace.sm,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(context.t('app.title'), style: AppText.display),
-                  const SizedBox(width: AppSpace.md),
                   StatusPill(
                     label: version ?? '—',
                     tone: AppColors.accentGreen,
@@ -83,7 +85,9 @@ class AboutView extends StatelessWidget {
                 ),
 
               const SizedBox(height: AppSpace.xl),
-              Divider(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+              Divider(
+                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+              ),
               const SizedBox(height: AppSpace.lg),
               Text(
                 context.t('about.undoNote'),
@@ -98,4 +102,3 @@ class AboutView extends StatelessWidget {
     );
   }
 }
-

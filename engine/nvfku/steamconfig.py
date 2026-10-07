@@ -480,7 +480,7 @@ def set_launch_options(
             appid=appid,
             value=value,
             previous=previous,
-            backup=path,
+            backup=None,
             backup_sha256="",
             created_key=created,
             verified=False,
@@ -531,6 +531,7 @@ def clear_launch_options(
     *,
     config_path: Path | None = None,
     proc_root: str = "/proc",
+    dry_run: bool = False,
 ) -> WriteResult:
     """Remove the app's ``LaunchOptions`` line, guarded the same way."""
     _assert_steam_closed(proc_root=proc_root)
@@ -542,6 +543,12 @@ def clear_launch_options(
     new_text, removed = remove_launch_options(original, appid)
     if not removed:
         raise SteamConfigError(f"appid {appid} has no LaunchOptions to remove")
+    if dry_run:
+        return WriteResult(
+            path=path, appid=appid, value="(removed)", previous=previous,
+            backup=None, backup_sha256="", created_key=False, verified=False,
+            notes=["dry run: nothing was written"],
+        )
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = paths.ensure_state_dir() / "steam-config-backups" / f"{path.name}.{stamp}.bak"

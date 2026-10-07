@@ -18,32 +18,35 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'engine.dart' show SettingsDocument;
+
 /// Supported languages, in the order the picker shows them.
 enum AppLanguage { system, english, chinese }
 
 extension AppLanguageX on AppLanguage {
   String get code => switch (this) {
-        AppLanguage.system => 'system',
-        AppLanguage.english => 'en',
-        AppLanguage.chinese => 'zh',
-      };
+    AppLanguage.system => 'system',
+    AppLanguage.english => 'en',
+    AppLanguage.chinese => 'zh',
+  };
 
   String get label => switch (this) {
-        AppLanguage.system => '跟随系统 / System',
-        AppLanguage.english => 'English',
-        AppLanguage.chinese => '简体中文',
-      };
+    AppLanguage.system => '跟随系统 / System',
+    AppLanguage.english => 'English',
+    AppLanguage.chinese => '简体中文',
+  };
 
   static AppLanguage fromCode(String? code) => switch (code) {
-        'en' => AppLanguage.english,
-        'zh' => AppLanguage.chinese,
-        _ => AppLanguage.system,
-      };
+    'en' => AppLanguage.english,
+    'zh' => AppLanguage.chinese,
+    _ => AppLanguage.system,
+  };
 }
 
 /// The current language. A notifier so a change repaints without a restart.
-final ValueNotifier<AppLanguage> appLanguage =
-    ValueNotifier<AppLanguage>(AppLanguage.system);
+final ValueNotifier<AppLanguage> appLanguage = ValueNotifier<AppLanguage>(
+  AppLanguage.system,
+);
 
 /// Resolves the effective language against the platform's preferred locales.
 Locale effectiveLocale(AppLanguage preference, Locale? platform) {
@@ -76,10 +79,12 @@ const Map<String, String> englishStrings = <String, String>{
       'Install into a game and it appears here. Every entry is a recorded '
       'operation you can undo.',
   'home.activityTitle': 'Activity',
-  'home.activitySubtitle': 'The journal, newest first. Each line is reversible.',
+  'home.activitySubtitle':
+      'The journal, newest first. Each line is reversible.',
   'home.logError': 'Could not read the journal',
   'home.stateLive': 'live',
   'home.stateRolledBack': 'undone',
+  'home.stateIncomplete': 'incomplete',
   'home.more': 'and {n} older entries — see History',
   'home.justNow': 'just now',
   'home.minAgo': '{n} min ago',
@@ -105,7 +110,8 @@ const Map<String, String> englishStrings = <String, String>{
   'status.starting': 'Starting the engine…',
   'status.scanning': 'Scanning your Steam libraries…',
   'status.summary': '{version} · {games} games · {dlss} ship DLSS',
-  'status.summaryModel': '{version} · {games} games · {dlss} ship DLSS · {model} carry a DLSS NR model',
+  'status.summaryModel':
+      '{version} · {games} games · {dlss} ship DLSS · {model} carry a DLSS NR model',
   'engine.failedTitle': 'The engine could not start',
   'common.tryAgain': 'Try again',
   'common.cancel': 'Cancel',
@@ -130,8 +136,11 @@ const Map<String, String> englishStrings = <String, String>{
   // Games
   'games.title': 'Games',
   'games.filter': 'Filter by name or appid',
+  'games.clearSearch': 'Clear search',
+  'menu.more': 'More actions',
   'games.addFolder': 'Add folder',
-  'games.addFolderTip': 'Register a game folder Steam does not manage, or drop one onto the window',
+  'games.addFolderTip':
+      'Register a game folder Steam does not manage, or drop one onto the window',
   'games.dropHere': 'Drop a game folder here',
   'games.emptyTitle': 'No games found',
   'games.emptyBody':
@@ -153,6 +162,10 @@ const Map<String, String> englishStrings = <String, String>{
   'games.unknownApi': 'unknown API',
   'games.addedByHand': 'added',
   'games.nrNone': 'not found on this machine',
+  'games.nrUnknown': 'unknown — detection incomplete',
+  'games.detectionIncomplete': 'Detection incomplete',
+  'games.detectionIncompleteBody':
+      'Scanning reached its limit. Missing components are unknown, not confirmed absent.',
   'games.nrPresent': 'present ({n} builds)',
   'games.install': 'Install',
   'games.hidePlan': 'Hide plan',
@@ -199,7 +212,8 @@ const Map<String, String> englishStrings = <String, String>{
   'plan.confirm': 'Confirm and install',
   'plan.cannotInstall': 'Cannot install',
   'plan.nothingToInstall': 'Nothing to install',
-  'plan.confirmTip': 'Writes exactly the plan above, after backing up every file it replaces',
+  'plan.confirmTip':
+      'Writes exactly the plan above, after backing up every file it replaces',
   'plan.resolveFirst': 'Resolve the blockers first',
   'plan.probeTip': 'This route only reports; it has nothing to install',
   'plan.details': 'Routes, plan details and launch options',
@@ -216,13 +230,15 @@ const Map<String, String> englishStrings = <String, String>{
   'plan.routesSubtitle':
       'One route installs one set of components. Viability is checked against this game, not in general.',
   'plan.planTitle': 'Plan',
-  'plan.planSubtitle': 'Everything below is checked before anything is written.',
+  'plan.planSubtitle':
+      'Everything below is checked before anything is written.',
   'plan.planReadOnly': 'This route only reports; it writes nothing.',
   'plan.whatWouldChange': 'What would change',
   'plan.filesYouSupply': 'Files you must supply',
   'plan.launchNeeded': 'Steam launch options this route needs',
   'plan.neuralResolution': 'Neural pass resolution',
-  'plan.neuralCost': 'Cost scales with the square of this; 100 is native and sharpest.',
+  'plan.neuralCost':
+      'Cost scales with the square of this; 100 is native and sharpest.',
   'plan.backToGames': 'Back to Games',
   'plan.appid': 'appid',
   'plan.renderingApi': 'rendering API',
@@ -273,7 +289,8 @@ const Map<String, String> englishStrings = <String, String>{
 
   // Add-ons
   'addons.title': 'Add-ons',
-  'addons.subtitle': 'What the routes install, and the exact bytes they expect.',
+  'addons.subtitle':
+      'What the routes install, and the exact bytes they expect.',
   'addons.pinned': 'Pinned',
   'addons.pinnedNote':
       'These bytes are verified. A mismatch is refused before anything reaches a game directory.',
@@ -302,12 +319,14 @@ const Map<String, String> englishStrings = <String, String>{
       'Journals appear here after an install. Each one records the files it replaced, so it can be undone exactly.',
   'history.rollBack': 'Roll back',
   'history.undoAgain': 'Undo again',
-  'history.rollBackTip': 'Replays the journal backwards and restores every file',
+  'history.rollBackTip':
+      'Replays the journal backwards and restores every file',
   'history.rolledBack': 'rolled back',
   'history.complete': 'complete',
   'history.incomplete': 'incomplete',
   'history.operations': '{n} operations',
   'history.rolledBackTitle': 'Rolled back',
+  'history.rollbackFailedTitle': 'Restore failed — state may have changed',
   'history.undoHint': 'Undo it from History, or with:',
   'history.note':
       "Backups live under the engine state directory, not inside the game folder, so a game can be verified against its store without the tool's own files confusing the check.",
@@ -331,10 +350,14 @@ const Map<String, String> englishStrings = <String, String>{
   'settings.verify': 'Verify components against the publisher',
   'settings.verifyHelp':
       'Compare each downloaded add-on with the digest its release page publishes. Pinned components are checked either way.',
+  'settings.theme': 'Appearance',
+  'settings.themeHelp':
+      'System follows the desktop. The window header is painted to match, so switching here changes it immediately.',
   'settings.language': 'Language',
   'settings.languageHelp':
       'Applies to this interface. Route names, digests and API names stay in English because they are identifiers you will also see in Steam and in the logs.',
-  'settings.saved': 'Saved. Rescanning the library with the new settings.',
+  'settings.saved': 'Settings saved.',
+  'settings.pending': 'Saving…',
   'settings.file': 'settings file',
   'settings.fileNote': 'shown by the CLI with `nvfku settings`',
 };
@@ -359,6 +382,7 @@ const Map<String, String> chineseStrings = <String, String>{
   'home.logError': '无法读取日志',
   'home.stateLive': '生效中',
   'home.stateRolledBack': '已撤销',
+  'home.stateIncomplete': '未完成',
   'home.more': '另有 {n} 条较早记录 — 见「历史」',
   'home.justNow': '刚刚',
   'home.minAgo': '{n} 分钟前',
@@ -369,17 +393,16 @@ const Map<String, String> chineseStrings = <String, String>{
   'nav.history': '历史',
   'nav.about': '关于',
   'about.tagline': '把 DLSS 5 神经渲染装进你的 Linux 游戏，也随时能干净地拿回来。',
-  'about.whyTwoRoutes':
-      '两条路线都用本地 DLL 代理，因为在 Proton 下 Vulkan layer 根本无法加载。',
+  'about.whyTwoRoutes': '两条路线都用本地 DLL 代理，因为在 Proton 下 Vulkan layer 根本无法加载。',
   'about.standsOnTitle': '基于以下项目',
   'about.byOptiscaler': 'OptiScaler 项目',
-  'about.undoNote':
-      '每次改动在写入前都会记账，所以「历史」可以精确撤销：被替换的文件逐字节还原，新建的文件被删除。',
+  'about.undoNote': '每次改动在写入前都会记账，所以「历史」可以精确撤销：被替换的文件逐字节还原，新建的文件被删除。',
   'nav.settings': '设置',
   'status.starting': '正在启动引擎…',
   'status.scanning': '正在扫描你的 Steam 库…',
   'status.summary': '{version} · {games} 个游戏 · {dlss} 个自带 DLSS',
-  'status.summaryModel': '{version} · {games} 个游戏 · {dlss} 个自带 DLSS · {model} 个带 DLSS NR 模型',
+  'status.summaryModel':
+      '{version} · {games} 个游戏 · {dlss} 个自带 DLSS · {model} 个带 DLSS NR 模型',
   'engine.failedTitle': '引擎无法启动',
   'common.tryAgain': '重试',
   'common.cancel': '取消',
@@ -404,6 +427,8 @@ const Map<String, String> chineseStrings = <String, String>{
   // Games
   'games.title': '游戏',
   'games.filter': '按名称或 appid 筛选',
+  'games.clearSearch': '清除搜索',
+  'menu.more': '更多操作',
   'games.addFolder': '添加文件夹',
   'games.addFolderTip': '登记一个 Steam 未管理的游戏目录，也可以直接把文件夹拖进窗口',
   'games.dropHere': '把游戏文件夹拖到这里',
@@ -426,6 +451,9 @@ const Map<String, String> chineseStrings = <String, String>{
   'games.unknownApi': '未知 API',
   'games.addedByHand': '手动添加',
   'games.nrNone': '本机未找到',
+  'games.nrUnknown': '未知 — 检测不完整',
+  'games.detectionIncomplete': '检测不完整',
+  'games.detectionIncompleteBody': '扫描已达到限制。尚未发现的组件状态未知，不能确定不存在。',
   'games.nrPresent': '已有（{n} 个 build）',
   'games.install': '安装',
   'games.hidePlan': '收起方案',
@@ -535,8 +563,7 @@ const Map<String, String> chineseStrings = <String, String>{
   'lo.backup': '备份',
   'lo.was': '原值：{value}',
   'lo.noSteamTitle': '该游戏没有 Steam 启动项',
-  'lo.noSteamBody':
-      '它是手动添加的，Steam 没有对应 appid 可挂载启动项。请在你实际启动它的地方自行设置环境变量。',
+  'lo.noSteamBody': '它是手动添加的，Steam 没有对应 appid 可挂载启动项。请在你实际启动它的地方自行设置环境变量。',
 
   // Add-ons
   'addons.title': '组件',
@@ -573,9 +600,9 @@ const Map<String, String> chineseStrings = <String, String>{
   'history.incomplete': '未完成',
   'history.operations': '{n} 次操作',
   'history.rolledBackTitle': '已回滚',
+  'history.rollbackFailedTitle': '还原失败 — 状态可能已改变',
   'history.undoHint': '可在“历史”里撤销，或使用：',
-  'history.note':
-      '备份保存在引擎状态目录下，而不是游戏目录里，这样用商店校验游戏文件时不会被本工具自己的文件干扰。',
+  'history.note': '备份保存在引擎状态目录下，而不是游戏目录里，这样用商店校验游戏文件时不会被本工具自己的文件干扰。',
 
   // Settings
   'settings.title': '设置',
@@ -592,12 +619,14 @@ const Map<String, String> chineseStrings = <String, String>{
   'settings.cacheHint': '留空则使用状态目录',
   'settings.cacheHelp': '下载的组件在两次安装之间保存在哪里。',
   'settings.verify': '对照发布方校验组件',
-  'settings.verifyHelp':
-      '把每个下载的组件与它 release 页公布的摘要比对。已钉定的组件无论如何都会校验。',
+  'settings.verifyHelp': '把每个下载的组件与它 release 页公布的摘要比对。已钉定的组件无论如何都会校验。',
+  'settings.theme': '外观',
+  'settings.themeHelp': '「跟随系统」跟随桌面设置。窗口标题栏会一并重绘，所以在这里切换会立即生效。',
   'settings.language': '语言',
   'settings.languageHelp':
       '只影响本界面。路线名、摘要和 API 名称保持英文——它们是标识符，你在 Steam 和日志里看到的也是这些。',
-  'settings.saved': '已保存。正在用新设置重新扫描游戏库。',
+  'settings.saved': '设置已保存。',
+  'settings.pending': '正在保存…',
   'settings.file': '设置文件',
   'settings.fileNote': '可用命令行 `nvfku settings` 查看',
 };
@@ -624,4 +653,97 @@ String translate(Locale locale, String key, [Map<String, Object?>? values]) {
 extension Translation on BuildContext {
   String t(String key, [Map<String, Object?>? values]) =>
       translate(Localizations.localeOf(this), key, values);
+}
+
+/// The interface colour scheme, and whether it is the user's choice or the desktop's.
+///
+/// A three-way choice rather than a boolean, because "follow the desktop" is not the
+/// same request as "dark": a user on a light desktop may still want this window dark,
+/// and picking either explicitly must survive a restart. `system` is the default so a
+/// first launch agrees with everything else on the machine.
+enum AppTheme { system, light, dark }
+
+extension AppThemeX on AppTheme {
+  /// The value the engine stores. Kept identical to `Settings.THEMES` in
+  /// `engine/nvfku/settings.py`; the engine rejects anything else, so a typo here
+  /// surfaces as a failed write rather than a setting that silently does not stick.
+  String get code => switch (this) {
+    AppTheme.system => 'system',
+    AppTheme.light => 'light',
+    AppTheme.dark => 'dark',
+  };
+
+  /// What the picker shows. The labels are deliberately not translated: "System",
+  /// "Light" and "Dark" are what the desktop's own appearance panel says, and a
+  /// translated label would stop matching the setting the user just changed.
+  String get label => switch (this) {
+    AppTheme.system => 'System',
+    AppTheme.light => 'Light',
+    AppTheme.dark => 'Dark',
+  };
+
+  ThemeMode get mode => switch (this) {
+    AppTheme.system => ThemeMode.system,
+    AppTheme.light => ThemeMode.light,
+    AppTheme.dark => ThemeMode.dark,
+  };
+
+  static AppTheme fromCode(String? code) => switch (code) {
+    'light' => AppTheme.light,
+    'dark' => AppTheme.dark,
+    _ => AppTheme.system,
+  };
+}
+
+/// The current colour scheme. A notifier so a change repaints without a restart,
+/// and so the header bar's native side can be told to repaint with it.
+final ValueNotifier<AppTheme> appTheme = ValueNotifier<AppTheme>(
+  AppTheme.system,
+);
+
+/// Applies the stored language and colour scheme to the notifiers.
+///
+/// Called before `runApp`, not from an `initState`, so the first frame is already in
+/// the right theme. Loading it after the shell is built produces a visible flash from
+/// the default to the stored choice, which reads as the app ignoring the setting for
+/// a moment.
+///
+/// A failure is swallowed on purpose: a missing or unreadable settings file must not
+/// stop the window opening, and both notifiers already hold working defaults.
+Future<void> loadStoredPreferences(EngineLike engine) async {
+  try {
+    final document = await engine.readSettingsDocument();
+    // Nothing has been written yet, so there is no preference to apply. Applying the
+    // defaults here would *overwrite* whatever the caller had already set: a test
+    // pointed this at an empty state directory and watched it replace a deliberate
+    // `dark` with `system`, because every settings field has a working default and a
+    // default is indistinguishable from a choice until you know the file exists.
+    if (!document.stored) {
+      return;
+    }
+    final theme = document.settings['theme'] as String?;
+    if (theme != null) {
+      appTheme.value = AppThemeX.fromCode(theme);
+    }
+    final language = document.settings['language'] as String?;
+    if (language != null) {
+      appLanguage.value = AppLanguageX.fromCode(language);
+    }
+  } catch (_) {
+    // Defaults stand.
+  }
+}
+
+/// The one method this needs from the engine, as an interface.
+///
+/// `l10n.dart` is imported by every view, and importing `engine.dart` from here would
+/// make the string tables depend on the subprocess machinery. Declaring the interface
+/// here inverts that: `Engine` implements it, so the dependency points from the engine
+/// to the strings rather than the other way.
+///
+/// Dart interfaces are nominal, so `Engine` has to name this explicitly — an earlier
+/// version of this comment claimed structural typing would make that unnecessary, and
+/// the analyzer disagreed.
+abstract interface class EngineLike {
+  Future<SettingsDocument> readSettingsDocument();
 }

@@ -7,14 +7,23 @@
 /// verified where it matters: in the laid-out tree, not in the string table.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
+import 'package:nvfku_ui/src/l10n.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nvfku_ui/src/app.dart';
 import 'package:nvfku_ui/src/engine.dart';
+import 'package:nvfku_ui/src/install_task.dart';
 import 'package:nvfku_ui/src/game_detail.dart';
 import 'package:nvfku_ui/src/games_view.dart';
+import 'package:nvfku_ui/src/home_view.dart';
+import 'package:nvfku_ui/src/history_view.dart';
 import 'package:nvfku_ui/src/models.dart';
 
 Game _game({
@@ -61,14 +70,17 @@ RoutePlan _plan({
 
 /// Pumps at a realistic desktop size.
 ///
-/// The default test viewport is 800x600, at which the games header legitimately
-/// overflows and every test then fails for a reason unrelated to its assertion.
+/// Defaults to a desktop viewport; compact-layout tests override it explicitly.
 Future<void> _pumpAt(
   WidgetTester tester,
   Widget child, {
   Locale locale = const Locale('zh'),
+  Size size = const Size(1440, 1000),
+  Brightness brightness = Brightness.dark,
+  double textScale = 1,
+  bool disableAnimations = false,
 }) async {
-  tester.view.physicalSize = const Size(1440, 1000);
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
@@ -81,7 +93,14 @@ Future<void> _pumpAt(
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: Dlss5CtlApp.buildTheme(Brightness.dark),
+      theme: Dlss5CtlApp.buildTheme(brightness),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: TextScaler.linear(textScale),
+          disableAnimations: disableAnimations,
+        ),
+        child: child!,
+      ),
       home: Scaffold(body: child),
     ),
   );
@@ -106,7 +125,264 @@ Widget _gamesView({
     );
 
 void main() {
+  group('library usability', () {
+    for (final width in [480.0, 800.0]) {
+      for (final locale in [const Locale('en'), const Locale('zh')]) {
+        for (final brightness in Brightness.values) {
+          testWidgets('toolbar fits $width ${locale.languageCode} $brightness', (tester) async {
+            await _pumpAt(tester, _gamesView(games: [_game()]),
+              size: Size(width, 700), locale: locale, brightness: brightness);
+            expect(tester.takeException(), isNull);
+            expect(find.byType(TextField), findsOneWidget);
+          });
+        }
+      }
+    }
+    for (final size in [const Size(375, 700), const Size(700, 400)]) {
+      testWidgets('library fits enlarged text with reduced motion at $size', (tester) async {
+        await _pumpAt(tester, _gamesView(games: [_game()]),
+          size: size, locale: const Locale('en'), textScale: 1.3,
+          disableAnimations: true);
+        expect(tester.takeException(), isNull);
+        expect(find.byTooltip('More actions'), findsOneWidget);
+      });
+    }
+    testWidgets('search mirrors external filter and can clear it', (tester) async {
+      String? changed;
+      Widget library(String filter) => GamesView(
+        games: [_game()], filter: filter, onFilter: (value) => changed = value,
+        onOpen: (_, {bool install = false}) {}, onOpenFolder: (_) async {},
+        onRescan: () async {}, engine: _QuietEngine(), busy: false,
+      );
+      await _pumpAt(tester, library('Assetto'), locale: const Locale('en'));
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text, 'Assetto');
+      await _pumpAt(tester, library('Corsa'), locale: const Locale('en'));
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text, 'Corsa');
+      await tester.tap(find.byTooltip('Clear search'));
+      await tester.pump();
+      expect(changed, '');
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text, '');
+    });
+    testWidgets('card opens using keyboard activation', (tester) async {
+      Game? opened;
+      await _pumpAt(tester, GamesView(
+        games: [_game()], filter: '', onFilter: (_) {},
+        onOpen: (game, {bool install = false}) => opened = game,
+        onOpenFolder: (_) async {}, onRescan: () async {},
+        engine: _QuietEngine(), busy: false,
+      ));
+      final card = find.byKey(const ValueKey('card-805550'));
+      final ink = find.descendant(of: card, matching: find.byType(InkWell)).first;
+      final control = tester.widget<InkWell>(ink);
+      expect(control.focusNode, isNotNull);
+      control.focusNode!.requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(opened?.appid, '805550');
+    });
+    testWidgets('card menu is available without hovering or right-clicking', (tester) async {
+      await _pumpAt(tester, GamesView(
+        games: [_game()], filter: '', onFilter: (_) {},
+        onOpen: (_, {bool install = false}) {}, onOpenFolder: (_) async {},
+        onRescan: () async {}, engine: _QuietEngine(), busy: false,
+      ), locale: const Locale('en'));
+      expect(find.byTooltip('More actions'), findsOneWidget);
+      await tester.tap(find.byTooltip('More actions'));
+      await tester.pumpAndSettle();
+      expect(find.text('Open game folder'), findsOneWidget);
+    });
+  });
   group('the shell', () {
+    testWidgets('game card hides restore when all journals were rolled back', (tester) async {
+      final engine = _RestoreMenuEngine()..onlyRolledBack = true;
+      await _pumpAt(tester, GamesView(
+        games: [_game()], filter: '', onFilter: (_) {}, busy: false,
+        engine: engine, onOpen: (_, {bool install = false}) {},
+        onRescan: () async {}, onOpenFolder: (_) async {},
+      ), locale: const Locale('en'));
+      final center = tester.getCenter(find.text('Assetto Corsa Competizione').first);
+      final gesture = await tester.startGesture(center,
+        kind: PointerDeviceKind.mouse, buttons: kSecondaryMouseButton);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.text('Restore originals'), findsNothing);
+    });
+
+    testWidgets('game-card restore skips newer rolled-back journal', (tester) async {
+      final engine = _RestoreMenuEngine();
+      await _pumpAt(tester, GamesView(
+        games: [_game()], filter: '', onFilter: (_) {}, busy: false,
+        engine: engine, onOpen: (_, {bool install = false}) {},
+        onRescan: () async {}, onOpenFolder: (_) async {},
+      ), locale: const Locale('en'));
+      final center = tester.getCenter(find.text('Assetto Corsa Competizione').first);
+      final gesture = await tester.startGesture(center,
+        kind: PointerDeviceKind.mouse, buttons: kSecondaryMouseButton);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.text('Restore originals'), findsOneWidget);
+      await tester.tap(find.text('Restore originals'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Restore originals'));
+      await tester.pumpAndSettle();
+      expect(engine.rolledBackId, 'unfinished');
+    });
+
+    testWidgets('open detail replans when its engine and scanned game change', (tester) async {
+      Widget detail(Engine engine, Game game) => GameDetailView(
+        game: game, engine: engine, embedded: true,
+        onBack: () {}, onChanged: () async {},
+      );
+      final engine = _PlanEngine([_plan(title: 'Old plan')]);
+      await _pumpAt(tester, detail(engine, _game()));
+      expect(find.text('Old plan'), findsOneWidget);
+      engine.plans.replaceRange(0, 1, [_plan(title: 'Updated plan')]);
+      await _pumpAt(tester, detail(engine, _game(name: 'Updated game')));
+      expect(find.text('Updated plan'), findsOneWidget);
+      expect(find.text('Old plan'), findsNothing);
+      await _pumpAt(tester, detail(_PlanEngine([_plan(title: 'New engine plan')]),
+          _game(name: 'Updated game')));
+      expect(find.text('New engine plan'), findsOneWidget);
+      expect(find.text('Updated plan'), findsNothing);
+    });
+
+    testWidgets('History refreshes journal status when installation completes', (tester) async {
+      final events = StreamController<InstallEvent>();
+      final engine = _RefreshingJournalEngine(events);
+      await _pumpAt(tester, HistoryView(engine: engine));
+      expect(find.text('未完成'), findsOneWidget);
+      engine.finished = true;
+      engine.startInstallation(gameKey: '805550', route: 'a1');
+      events.add(const InstallEvent(phase: 'done', message: '',
+        result: InstallResult(route: 'a1', game: 'Test', gameDir: '/games/Test')));
+      await events.close();
+      await tester.pumpAndSettle();
+      expect(find.text('已完成'), findsOneWidget);
+    });
+
+    testWidgets('Home refreshes journal status when installation completes', (tester) async {
+      final events = StreamController<InstallEvent>();
+      final engine = _RefreshingJournalEngine(events);
+      await _pumpAt(tester, HomeView(
+        engine: engine, games: const [], artwork: const {},
+        onOpen: (_) {}, onAddFolder: () async {}, onRescan: () async {},
+      ));
+      expect(find.text('未完成'), findsOneWidget);
+      engine.finished = true;
+      engine.startInstallation(gameKey: '805550', route: 'a1');
+      events.add(const InstallEvent(phase: 'done', message: '',
+        result: InstallResult(route: 'a1', game: 'Test', gameDir: '/games/Test')));
+      await events.close();
+      await tester.pumpAndSettle();
+      expect(find.text('生效中'), findsOneWidget);
+      expect(find.text('未完成'), findsNothing);
+    });
+
+    testWidgets('History labels interrupted restore incomplete, not complete', (tester) async {
+      final engine = _RecoveringJournalEngine();
+      await _pumpAt(tester, HistoryView(engine: engine));
+      expect(find.text('未完成'), findsOneWidget);
+      expect(find.text('已完成'), findsNothing);
+    });
+
+    testWidgets('Home labels interrupted restore incomplete, not live', (tester) async {
+      await _pumpAt(tester, HomeView(
+        engine: _RecoveringJournalEngine(), games: const [], artwork: const {},
+        onOpen: (_) {}, onAddFolder: () async {}, onRescan: () async {},
+      ));
+      expect(find.text('未完成'), findsOneWidget);
+      expect(find.text('生效中'), findsNothing);
+    });
+
+    testWidgets('History preserves rollback error after revision refresh', (tester) async {
+      final engine = _FailedRollbackRefreshEngine();
+      await _pumpAt(tester, HistoryView(engine: engine), locale: const Locale('en'));
+      await tester.tap(find.text('Roll back'));
+      await tester.pumpAndSettle();
+      expect(find.text('second.dll: permission denied'), findsOneWidget);
+      engine.refresh.complete(const [JournalEntry(
+        id: 'recovering', route: 'a1', gameDir: '/games/Test', operations: 2,
+        finished: true, rolledBack: false, rollbackStarted: true,
+      )]);
+      await tester.pumpAndSettle();
+      expect(find.text('second.dll: permission denied'), findsOneWidget);
+      expect(find.text('Rolled back'), findsNothing);
+    });
+
+    testWidgets('Home labels unfinished activity as incomplete, not live', (tester) async {
+      final engine = _JournalEngine();
+      await _pumpAt(tester, HomeView(
+        engine: engine, games: const [], artwork: const {},
+        onOpen: (_) {}, onAddFolder: () async {}, onRescan: () async {},
+      ));
+      expect(find.text('未完成'), findsOneWidget);
+      expect(find.text('生效中'), findsNothing);
+    });
+
+    testWidgets('late scan cannot overwrite a newer library', (tester) async {
+      final engine = _DeferredScanEngine();
+      tester.view.physicalSize = const Size(1440, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(home: Shell(
+        engine: engine,
+        initialView: AppView.games,
+        initialGames: [_game(name: 'Initial')],
+      )));
+      await tester.pump();
+      expect(engine.pending.length, 1);
+      final rescan = tester.widget<GamesView>(find.byType(GamesView)).onRescan();
+      await tester.pump();
+      expect(engine.pending.length, 2);
+      engine.pending.last.complete([_game(name: 'Fresh')]);
+      await rescan;
+      await tester.pumpAndSettle();
+      engine.pending.first.complete([_game(name: 'Stale')]);
+      await tester.pumpAndSettle();
+      expect(find.text('Fresh'), findsWidgets);
+      expect(find.text('Stale'), findsNothing);
+    });
+
+    testWidgets('an install finishes with no sheet and rescans the library', (tester) async {
+      final events = StreamController<InstallEvent>();
+      final engine = _EventShellEngine(events);
+      await _pumpAt(tester, Shell(
+        engine: engine,
+        initialView: AppView.games,
+        initialGames: [_game()],
+      ));
+      final initialScans = engine.scans;
+      engine.startInstallation(gameKey: '805550', route: 'a1');
+      events.add(const InstallEvent(
+        phase: 'done', message: '',
+        result: InstallResult(route: 'a1', game: 'Test', gameDir: '/games/Test'),
+      ));
+      await events.close();
+      await tester.pumpAndSettle();
+      expect(engine.scans, initialScans + 1);
+    });
+
+    testWidgets('theme and language changes retain the same engine', (tester) async {
+      final originalTheme = appTheme.value;
+      final originalLanguage = appLanguage.value;
+      addTearDown(() {
+        appTheme.value = originalTheme;
+        appLanguage.value = originalLanguage;
+      });
+      var created = 0;
+      await _pumpAt(tester, Dlss5CtlApp(engineFactory: () {
+        created++;
+        return _QuietEngine();
+      }));
+      final owner = tester.widget<Shell>(find.byType(Shell)).engine;
+      appTheme.value = AppTheme.dark;
+      await tester.pumpAndSettle();
+      appLanguage.value = AppLanguage.chinese;
+      await tester.pumpAndSettle();
+      expect(tester.widget<Shell>(find.byType(Shell)).engine, same(owner));
+      expect(created, 1);
+    });
     testWidgets('paints Chinese when the locale is zh', (tester) async {
       await _pumpAt(tester, const _ShellHarness(), locale: const Locale('zh'));
 
@@ -182,7 +458,8 @@ void main() {
       await _pumpAt(tester, _gamesView(games: [_game()], filter: 'zzzz'));
 
       expect(find.text('没有匹配项'), findsOneWidget);
-      expect(find.textContaining('zzzz'), findsOneWidget);
+      expect(find.text('没有游戏名或 appid 包含“zzzz”。'), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text, 'zzzz');
     });
   });
 
@@ -474,6 +751,10 @@ class _PlanEngine implements Engine {
   _PlanEngine(this.plans, {this.steamRunning = false});
 
   final List<RoutePlan> plans;
+  final InstallTask task = InstallTask();
+
+  @override
+  InstallTask installationFor(String gameKey, String route) => task;
 
   /// The view re-reads the live Steam state on a timer, so this is what decides
   /// whether the gate is closed.
@@ -511,7 +792,107 @@ class _StubEngine implements Engine {
 /// assignable to `Future<String>`, so an untyped stub fails with a type error that
 /// looks like a bug in the widget. The methods the shell actually calls are
 /// therefore implemented explicitly and the rest still throw.
-class _QuietEngine implements Engine {
+class _RestoreMenuEngine extends _QuietEngine {
+  String? rolledBackId;
+  bool onlyRolledBack = false;
+  @override
+  Future<List<JournalEntry>> backups({String? gameKey}) async => [
+    const JournalEntry(id: 'newer', route: 'a1', gameDir: '/games/Game',
+        operations: 1, finished: true, rolledBack: true),
+    if (!onlyRolledBack)
+      const JournalEntry(id: 'unfinished', route: 'a1', gameDir: '/games/Game',
+          operations: 1, finished: false, rolledBack: false),
+  ];
+  @override
+  Future<String> rollback(String journalId) async {
+    rolledBackId = journalId;
+    return 'restored';
+  }
+}
+
+class _RefreshingJournalEngine extends _EventShellEngine {
+  _RefreshingJournalEngine(super.events);
+  bool finished = false;
+  @override
+  Future<List<JournalEntry>> backups({String? gameKey}) async => [
+    JournalEntry(id: 'journal', route: 'a1', gameDir: '/games/Test',
+        operations: 1, finished: finished, rolledBack: false),
+  ];
+}
+
+class _JournalEngine extends _QuietEngine {
+  @override
+  Future<List<JournalEntry>> backups({String? gameKey}) async => const [
+    JournalEntry(id: 'unfinished', route: 'a1', gameDir: '/games/Test',
+        operations: 1, finished: false, rolledBack: false),
+  ];
+}
+
+class _RecoveringJournalEngine extends _QuietEngine {
+  @override
+  Future<List<JournalEntry>> backups({String? gameKey}) async => const [
+    JournalEntry(id: 'recovering', route: 'a1', gameDir: '/games/Test',
+        operations: 2, finished: true, rolledBack: false, rollbackStarted: true),
+  ];
+}
+
+class _FailedRollbackRefreshEngine extends _RecoveringJournalEngine {
+  final _changes = ValueNotifier<int>(0);
+  final refresh = Completer<List<JournalEntry>>();
+  @override
+  ValueListenable<int> get revision => _changes;
+  @override
+  Future<List<JournalEntry>> backups({String? gameKey}) =>
+      _changes.value == 0 ? super.backups(gameKey: gameKey) : refresh.future;
+  @override
+  Future<String> rollback(String journalId) async {
+    _changes.value++;
+    throw EngineException('second.dll: permission denied');
+  }
+}
+
+class _DeferredScanEngine extends Engine {
+  _DeferredScanEngine() : super(projectRoot: '/nonexistent');
+  final List<Completer<List<Game>>> pending = [];
+  @override
+  Future<String> version() async => 'test';
+  @override
+  Future<List<Game>> scan() {
+    final completer = Completer<List<Game>>();
+    pending.add(completer);
+    return completer.future;
+  }
+  @override
+  Future<Map<String, String?>> cachedArtwork() async => const {};
+}
+
+class _EventShellEngine extends Engine {
+  _EventShellEngine(this.events) : super(projectRoot: '/nonexistent');
+  final StreamController<InstallEvent> events;
+  int scans = 0;
+
+  @override
+  Future<String> version() async => 'test';
+  @override
+  Future<List<Game>> scan() async {
+    scans++;
+    return [_game()];
+  }
+  @override
+  Future<Map<String, String?>> cachedArtwork() async => const {};
+  @override
+  Stream<InstallEvent> install({
+    required String gameKey, required String route, int? workingScale,
+    bool yes = true, bool skipDownload = false, bool verifyUpstream = true,
+  }) => events.stream;
+}
+
+class _QuietEngine extends Engine {
+  _QuietEngine() : super(projectRoot: '/nonexistent');
+
+  @override
+  Future<List<JournalEntry>> backups({String? gameKey}) async => const [];
+
   @override
   Future<String> version() async => 'nvfku test';
 

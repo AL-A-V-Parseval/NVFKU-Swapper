@@ -78,18 +78,16 @@ class ReadmePairTest(unittest.TestCase):
                     f"{path.name} still says {phrase!r}, which is not true",
                 )
 
-    def test_the_test_count_is_the_real_one(self) -> None:
-        """The README quotes a count; this is the one place that can check it.
-
-        Counting the suite from inside the suite is circular, so the assertion is
-        only that both READMEs agree — a mismatch between them is the drift that
-        actually happened.
-        """
-        en = re.search(r"\*\*(\d+) tests", EN.read_text(encoding="utf-8"))
-        zh = re.search(r"\*\*(\d+) 项测试", ZH.read_text(encoding="utf-8"))
-        self.assertIsNotNone(en, "README.md no longer states a test count")
-        self.assertIsNotNone(zh, "README.zh.md no longer states a test count")
-        self.assertEqual(en.group(1), zh.group(1), "the two READMEs quote different counts")
+    def test_both_link_to_reproducible_checks_instead_of_freezing_a_test_count(self) -> None:
+        for path in (EN, ZH):
+            with self.subTest(readme=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("docs/release-workflow.md", links(path))
+                self.assertNotRegex(text, r"\*\*\d+ (?:tests|项测试)")
+        workflow = (ROOT / "docs/release-workflow.md").read_text(encoding="utf-8")
+        self.assertIn("python -m unittest discover -s engine/tests -q", workflow)
+        self.assertIn("flutter test --no-pub", workflow)
+        self.assertIn("python tools/verify_release.py", workflow)
 
 
 if __name__ == "__main__":

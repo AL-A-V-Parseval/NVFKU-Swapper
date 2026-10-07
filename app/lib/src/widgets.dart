@@ -64,21 +64,22 @@ class _HoldButtonState extends State<HoldButton> {
           Icon(widget.icon, size: widget.dense ? 15 : 17),
         if (widget.busy || widget.icon != null)
           SizedBox(width: widget.dense ? AppSpace.xs + 2 : AppSpace.sm),
-        Text(widget.dense ? widget.label : widget.label, style: AppText.label),
+        Flexible(child: Text(widget.label, style: AppText.label)),
       ],
     );
 
-    final button = widget.emphasized
-        ? FilledButton(
-            onPressed: enabled ? widget.onPressed : null,
-            style: _style(context),
-            child: child,
-          )
-        : OutlinedButton(
-            onPressed: enabled ? widget.onPressed : null,
-            style: _style(context),
-            child: child,
-          );
+    final button =
+        widget.emphasized
+            ? FilledButton(
+              onPressed: enabled ? widget.onPressed : null,
+              style: _style(context),
+              child: child,
+            )
+            : OutlinedButton(
+              onPressed: enabled ? widget.onPressed : null,
+              style: _style(context),
+              child: child,
+            );
 
     final wrapped = AnimatedScale(
       scale: scale,
@@ -101,9 +102,16 @@ class _HoldButtonState extends State<HoldButton> {
   }
 
   ButtonStyle _style(BuildContext context) {
-    final padding = widget.dense
-        ? const EdgeInsets.symmetric(horizontal: AppSpace.md, vertical: AppSpace.xs)
-        : const EdgeInsets.symmetric(horizontal: AppSpace.lg, vertical: AppSpace.sm + 2);
+    final padding =
+        widget.dense
+            ? const EdgeInsets.symmetric(
+              horizontal: AppSpace.md,
+              vertical: AppSpace.xs,
+            )
+            : const EdgeInsets.symmetric(
+              horizontal: AppSpace.lg,
+              vertical: AppSpace.sm + 2,
+            );
     return ButtonStyle(
       padding: WidgetStatePropertyAll(padding),
       minimumSize: const WidgetStatePropertyAll(Size(0, 0)),
@@ -173,7 +181,9 @@ class FieldRow extends StatelessWidget {
           Expanded(
             child: SelectableText(
               value,
-              style: (mono ? AppText.mono : AppText.body).copyWith(color: valueColour),
+              style: (mono ? AppText.mono : AppText.body).copyWith(
+                color: valueColour,
+              ),
             ),
           ),
           if (trailing != null) trailing!,
@@ -199,30 +209,48 @@ class SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpace.md),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: AppText.title),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle!,
-                    style: AppText.caption.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: AppText.title),
+        if (subtitle != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            subtitle!,
+            style: AppText.caption.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
-          if (trailing != null) trailing!,
         ],
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpace.md),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact =
+              constraints.maxWidth / MediaQuery.textScalerOf(context).scale(1) <
+              500;
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                heading,
+                if (trailing != null) ...[
+                  const SizedBox(height: AppSpace.sm),
+                  trailing!,
+                ],
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(child: heading),
+              if (trailing != null) trailing!,
+            ],
+          );
+        },
       ),
     );
   }
@@ -258,7 +286,9 @@ class EmptyState extends StatelessWidget {
             const SizedBox(height: AppSpace.sm),
             Text(
               body,
-              style: AppText.body.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: AppText.body.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
               textAlign: TextAlign.center,
             ),
             if (action != null) ...[
@@ -314,7 +344,10 @@ class Notice extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: AppText.label.copyWith(color: tone, fontWeight: FontWeight.w600),
+                  style: AppText.label.copyWith(
+                    color: tone,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -342,8 +375,8 @@ class Notice extends StatelessWidget {
 /// Drag-and-drop from the desktop into a Flutter window depends on the
 /// embedder; this reports what is actually true rather than assuming, so the UI
 /// can say "use Add folder" instead of silently doing nothing.
-bool get dragAndDropSupported => Platform.isLinux || Platform.isMacOS || Platform.isWindows;
-
+bool get dragAndDropSupported =>
+    Platform.isLinux || Platform.isMacOS || Platform.isWindows;
 
 /// Asks for a game folder path.
 ///
@@ -359,37 +392,40 @@ Future<String?> promptForGameFolder(BuildContext context) async {
   try {
     return await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.t('games.addTitle')),
-        content: SizedBox(
-          width: 460,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(context.t('games.addBody'), style: AppText.body),
-              const SizedBox(height: AppSpace.md),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                style: AppText.mono,
-                decoration: InputDecoration(hintText: context.t('games.addHint')),
-                onSubmitted: (value) => Navigator.of(context).pop(value),
+      builder:
+          (context) => AlertDialog(
+            title: Text(context.t('games.addTitle')),
+            content: SizedBox(
+              width: 460,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(context.t('games.addBody'), style: AppText.body),
+                  const SizedBox(height: AppSpace.md),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    style: AppText.mono,
+                    decoration: InputDecoration(
+                      hintText: context.t('games.addHint'),
+                    ),
+                    onSubmitted: (value) => Navigator.of(context).pop(value),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(context.t('common.cancel')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(controller.text),
+                child: Text(context.t('games.add')),
               ),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(context.t('common.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: Text(context.t('games.add')),
-          ),
-        ],
-      ),
     );
   } finally {
     controller.dispose();
@@ -505,12 +541,13 @@ class _DisclosureState extends State<Disclosure> {
           duration: AppMotion.resolve(context, AppMotion.standard),
           curve: AppMotion.settle,
           alignment: Alignment.topLeft,
-          child: _open
-              ? Padding(
-                  padding: const EdgeInsets.only(top: AppSpace.sm, left: 24),
-                  child: widget.child,
-                )
-              : const SizedBox(width: double.infinity),
+          child:
+              _open
+                  ? Padding(
+                    padding: const EdgeInsets.only(top: AppSpace.sm, left: 24),
+                    child: widget.child,
+                  )
+                  : const SizedBox(width: double.infinity),
         ),
       ],
     );

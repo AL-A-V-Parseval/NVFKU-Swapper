@@ -37,40 +37,15 @@ import 'widgets.dart';
 
 enum AppView { home, games, addons, history, settings, about }
 
-class Dlss5CtlApp extends StatelessWidget {
-  const Dlss5CtlApp({super.key, this.engine});
+class Dlss5CtlApp extends StatefulWidget {
+  const Dlss5CtlApp({super.key, this.engine, this.engineFactory});
 
   /// Injectable so tests and the screenshot harness can drive the UI.
   final Engine? engine;
+  final Engine Function()? engineFactory;
 
   @override
-  Widget build(BuildContext context) {
-    // Rebuilds when the language changes, so the picker takes effect without a
-    // restart.
-    return ValueListenableBuilder<AppLanguage>(
-      valueListenable: appLanguage,
-      builder: (context, preference, _) {
-        final platform = WidgetsBinding.instance.platformDispatcher.locale;
-        return MaterialApp(
-          onGenerateTitle: (context) => context.t('app.windowTitle'),
-          debugShowCheckedModeBanner: false,
-          theme: buildTheme(Brightness.light),
-          darkTheme: buildTheme(Brightness.dark),
-          themeMode: ThemeMode.system,
-          locale: effectiveLocale(preference, platform),
-          supportedLocales: const [Locale('en'), Locale('zh')],
-          // The global delegates, not the defaults: the defaults carry English
-          // only, so a zh locale left Material widgets without localisations.
-          localizationsDelegates: const [
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          home: Shell(engine: engine ?? Engine()),
-        );
-      },
-    );
-  }
+  State<Dlss5CtlApp> createState() => _Dlss5CtlAppState();
 
   /// The palette seen in the tool this project reworks, expressed as a Material
   /// scheme.
@@ -82,55 +57,57 @@ class Dlss5CtlApp extends StatelessWidget {
   static ThemeData buildTheme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
     // The reference's two-step neutral ramp, plus the lime accent.
-    final scheme = dark
-        ? const ColorScheme.dark(
-            primary: AppColors.accentGreen,
-            onPrimary: Color(0xFF0B1400),
-            primaryContainer: Color(0xFF2A4A05),
-            onPrimaryContainer: Color(0xFFD6F0A8),
-            secondary: Color(0xFF8FA3B8),
-            onSecondary: Color(0xFF0B1016),
-            surface: Color(0xFF0A0A0B),
-            onSurface: Color(0xFFF0F4F9),
-            onSurfaceVariant: Color(0xFF9AA7B6),
-            // One step up from the page, then another. Visible, not subtle.
-            surfaceContainerLowest: Color(0xFF0E0E10),
-            surfaceContainerLow: Color(0xFF12171F),
-            surfaceContainer: Color(0xFF121214),
-            surfaceContainerHigh: Color(0xFF1A1A1D),
-            surfaceContainerHighest: Color(0xFF242428),
-            outline: Color(0xFF3A4552),
-            outlineVariant: Color(0xFF26262A),
-            error: Color(0xFFEF7B7B),
-            onError: Color(0xFF2A0A0A),
-          )
-        : const ColorScheme.light(
-            primary: AppColors.accentGreenDeep,
-            onPrimary: Colors.white,
-            primaryContainer: Color(0xFFDDF3BC),
-            onPrimaryContainer: Color(0xFF1B2E00),
-            secondary: Color(0xFF5A6A7A),
-            surface: Color(0xFFEEF1F4),
-            onSurface: Color(0xFF1B2229),
-            onSurfaceVariant: Color(0xFF6B7885),
-            surfaceContainerLowest: Color(0xFFF7F9FA),
-            surfaceContainerLow: Color(0xFFFFFFFF),
-            surfaceContainer: Color(0xFFF1F5F8),
-            surfaceContainerHigh: Color(0xFFE3E8EC),
-            surfaceContainerHighest: Color(0xFFD8DEE4),
-            outline: Color(0xFFB4C0CC),
-            outlineVariant: Color(0xFFD3DAE1),
-            error: Color(0xFFB3261E),
-          );
+    final scheme =
+        dark
+            ? const ColorScheme.dark(
+              primary: AppColors.accentGreen,
+              onPrimary: Color(0xFF0B1400),
+              primaryContainer: Color(0xFF2A4A05),
+              onPrimaryContainer: Color(0xFFD6F0A8),
+              secondary: Color(0xFF8FA3B8),
+              onSecondary: Color(0xFF0B1016),
+              surface: Color(0xFF0A0A0B),
+              onSurface: Color(0xFFF0F4F9),
+              onSurfaceVariant: Color(0xFF9AA7B6),
+              // One step up from the page, then another. Visible, not subtle.
+              surfaceContainerLowest: Color(0xFF0E0E10),
+              surfaceContainerLow: Color(0xFF12171F),
+              surfaceContainer: Color(0xFF121214),
+              surfaceContainerHigh: Color(0xFF1A1A1D),
+              surfaceContainerHighest: Color(0xFF242428),
+              outline: Color(0xFF3A4552),
+              outlineVariant: Color(0xFF26262A),
+              error: Color(0xFFEF7B7B),
+              onError: Color(0xFF2A0A0A),
+            )
+            : const ColorScheme.light(
+              primary: AppColors.accentGreenDeep,
+              onPrimary: Colors.white,
+              primaryContainer: Color(0xFFDDF3BC),
+              onPrimaryContainer: Color(0xFF1B2E00),
+              secondary: Color(0xFF5A6A7A),
+              surface: Color(0xFFEEF1F4),
+              onSurface: Color(0xFF1B2229),
+              onSurfaceVariant: Color(0xFF6B7885),
+              surfaceContainerLowest: Color(0xFFF7F9FA),
+              surfaceContainerLow: Color(0xFFFFFFFF),
+              surfaceContainer: Color(0xFFF1F5F8),
+              surfaceContainerHigh: Color(0xFFE3E8EC),
+              surfaceContainerHighest: Color(0xFFD8DEE4),
+              outline: Color(0xFFB4C0CC),
+              outlineVariant: Color(0xFFD3DAE1),
+              error: Color(0xFFB3261E),
+            );
 
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
       scaffoldBackgroundColor: scheme.surface,
       dividerTheme: DividerThemeData(
-        color: dark
-            ? Colors.white.withValues(alpha: 0.055)
-            : Colors.black.withValues(alpha: 0.08),
+        color:
+            dark
+                ? Colors.white.withValues(alpha: 0.055)
+                : Colors.black.withValues(alpha: 0.08),
         thickness: 1,
         space: 1,
       ),
@@ -140,9 +117,10 @@ class Dlss5CtlApp extends StatelessWidget {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppSpace.radiusLarge),
           side: BorderSide(
-            color: dark
-                ? Colors.white.withValues(alpha: 0.075)
-                : Colors.black.withValues(alpha: 0.10),
+            color:
+                dark
+                    ? Colors.white.withValues(alpha: 0.075)
+                    : Colors.black.withValues(alpha: 0.10),
           ),
         ),
       ),
@@ -178,6 +156,52 @@ class Dlss5CtlApp extends StatelessWidget {
   }
 }
 
+class _Dlss5CtlAppState extends State<Dlss5CtlApp> {
+  late Engine _engine;
+
+  @override
+  void initState() {
+    super.initState();
+    _engine = widget.engine ?? widget.engineFactory?.call() ?? Engine();
+  }
+
+  @override
+  void didUpdateWidget(Dlss5CtlApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(widget.engine, oldWidget.engine) && widget.engine != null) {
+      _engine = widget.engine!;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<AppLanguage>(
+    valueListenable: appLanguage,
+    builder:
+        (context, preference, _) => ValueListenableBuilder<AppTheme>(
+          valueListenable: appTheme,
+          builder:
+              (context, theme, _) => MaterialApp(
+                onGenerateTitle: (context) => context.t('app.windowTitle'),
+                debugShowCheckedModeBanner: false,
+                theme: Dlss5CtlApp.buildTheme(Brightness.light),
+                darkTheme: Dlss5CtlApp.buildTheme(Brightness.dark),
+                themeMode: theme.mode,
+                locale: effectiveLocale(
+                  preference,
+                  WidgetsBinding.instance.platformDispatcher.locale,
+                ),
+                supportedLocales: const [Locale('en'), Locale('zh')],
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                ],
+                home: Shell(engine: _engine),
+              ),
+        ),
+  );
+}
+
 class Shell extends StatefulWidget {
   const Shell({
     super.key,
@@ -203,13 +227,11 @@ class Shell extends StatefulWidget {
   /// Opens the initial game at its install panel rather than the top.
   final bool initialForInstall;
 
-
   /// Called when the detail view has finished loading a game's plans. A
   /// deterministic signal for a driver: polling for "enough pixels" cannot
   /// distinguish the detail page from the list, and will happily capture the
   /// wrong view.
   final VoidCallback? onGameReady;
-
 
   @override
   State<Shell> createState() => _ShellState();
@@ -245,7 +267,14 @@ class _ShellState extends State<Shell> {
         widget.initialGames != null) {
       setState(() => _games = widget.initialGames);
     }
+    if (!identical(oldWidget.engine, widget.engine)) {
+      oldWidget.engine.revision.removeListener(_stateChanged);
+      widget.engine.revision.addListener(_stateChanged);
+      _version = null;
+      unawaited(_scan());
+    }
   }
+
   String _filter = '';
   String? _statusOverride;
   String _statusKey = 'status.starting';
@@ -254,14 +283,26 @@ class _ShellState extends State<Shell> {
   bool _failed = false;
   String? _version;
   Map<String, String?> _artwork = const {};
+  int _scanGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    widget.engine.revision.addListener(_stateChanged);
     _scan();
   }
 
+  void _stateChanged() => unawaited(_scan());
+
+  @override
+  void dispose() {
+    widget.engine.revision.removeListener(_stateChanged);
+    super.dispose();
+  }
+
   Future<void> _scan() async {
+    final request = ++_scanGeneration;
+    final engine = widget.engine;
     setState(() {
       _busy = true;
       _failed = false;
@@ -271,13 +312,18 @@ class _ShellState extends State<Shell> {
     });
     try {
       // The version costs a whole Python start-up, so it is asked once.
-      _version ??= await widget.engine.version();
-      final games = await widget.engine.scan();
-      if (!mounted) return;
+      final version = _version ?? await engine.version();
+      if (!mounted || request != _scanGeneration) return;
+      _version = version;
+      final games = await engine.scan();
+      if (!mounted || request != _scanGeneration) return;
       final withDlss = games.where((g) => g.hasNativeDlss).length;
       final withModel = games.where((g) => g.hasNrModel).length;
       setState(() {
         _games = games;
+        if (_open != null) {
+          _open = games.where((game) => game.appid == _open!.appid).firstOrNull;
+        }
         _busy = false;
         _statusKey = withModel > 0 ? 'status.summaryModel' : 'status.summary';
         _statusValues = {
@@ -291,9 +337,9 @@ class _ShellState extends State<Shell> {
       // Covers are a separate, cheap query of what the engine already cached.
       // It never touches the network, so a slow connection cannot hold up the
       // library, and a failure only costs the thumbnails.
-      unawaited(_loadArtwork());
+      unawaited(_loadArtwork(engine, request));
     } on EngineException catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != _scanGeneration) return;
       setState(() {
         _busy = false;
         _failed = true;
@@ -304,10 +350,10 @@ class _ShellState extends State<Shell> {
 
   String get _status => _statusOverride ?? context.t(_statusKey, _statusValues);
 
-  Future<void> _loadArtwork() async {
+  Future<void> _loadArtwork(Engine engine, int request) async {
     try {
-      final artwork = await widget.engine.cachedArtwork();
-      if (!mounted) return;
+      final artwork = await engine.cachedArtwork();
+      if (!mounted || request != _scanGeneration) return;
       setState(() => _artwork = artwork);
     } on EngineException {
       // Thumbnails are decoration; the library is still usable without them.
@@ -322,9 +368,9 @@ class _ShellState extends State<Shell> {
       await widget.engine.addGameFolder(path.trim());
     } on EngineException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(error.message)));
       }
       return;
     }
@@ -342,16 +388,14 @@ class _ShellState extends State<Shell> {
       if (result.exitCode != 0 && mounted) {
         final detail = (result.stderr as String).trim();
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(
-            content: Text(detail.isEmpty ? game.installDir : detail),
-          ),
+          SnackBar(content: Text(detail.isEmpty ? game.installDir : detail)),
         );
       }
     } on ProcessException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -369,60 +413,113 @@ class _ShellState extends State<Shell> {
     final games = _games;
 
     final open = _open;
-    return Scaffold(
-      body: Stack(
-        children: [
-          Row(
-        children: [
-          _Sidebar(current: _view, onSelect: _go, disabled: _failed),
-          Expanded(
-            child: Column(
-              children: [
-                Expanded(
-                  child: _failed
-                      ? _EngineFailure(message: _status, onRetry: _scan)
-                      : games == null
-                          ? const Center(child: CircularProgressIndicator())
-                          : AnimatedSwitcher(
-                              duration: AppMotion.resolve(context, AppMotion.fast),
-                              switchInCurve: AppMotion.enter,
-                              switchOutCurve: AppMotion.exit,
-                              child: _content(games),
-                            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // A normal half-screen Wayland tile is often ~844 logical pixels.
+        // Keep desktop navigation visible there, not behind a mobile drawer.
+        final compact = constraints.maxWidth < 760;
+        return Scaffold(
+          appBar:
+              compact
+                  ? AppBar(
+                    title: Text(context.t('app.title')),
+                    leading: Builder(
+                      builder:
+                          (context) => IconButton(
+                            tooltip:
+                                MaterialLocalizations.of(
+                                  context,
+                                ).openAppDrawerTooltip,
+                            // Keep the navigation glyph explicit for release font
+                            // subsetting; verify built assets after rebuilds too.
+                            icon: const Icon(Icons.menu),
+                            onPressed: () => Scaffold.of(context).openDrawer(),
+                          ),
+                    ),
+                  )
+                  : null,
+          drawer:
+              compact
+                  ? Drawer(
+                    child: _Sidebar(
+                      current: _view,
+                      disabled: _failed,
+                      onSelect: (view) {
+                        Navigator.of(context).pop();
+                        _go(view);
+                      },
+                    ),
+                  )
+                  : null,
+          body: Stack(
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!compact)
+                    _Sidebar(current: _view, onSelect: _go, disabled: _failed),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child:
+                              _failed
+                                  ? _EngineFailure(
+                                    message: _status,
+                                    onRetry: _scan,
+                                  )
+                                  : games == null
+                                  ? const Center(
+                                    child: CircularProgressIndicator(),
+                                  )
+                                  : AnimatedSwitcher(
+                                    duration: AppMotion.resolve(
+                                      context,
+                                      AppMotion.fast,
+                                    ),
+                                    switchInCurve: AppMotion.enter,
+                                    switchOutCurve: AppMotion.exit,
+                                    child: _content(games),
+                                  ),
+                        ),
+                        _StatusBar(
+                          message:
+                              _statusOverride ??
+                              context.t(_statusKey, _statusValues),
+                          busy: _busy,
+                          failed: _failed,
+                          trailing: _open?.name,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              // The sheet floats over the library rather than replacing it, so the
+              // scroll position and filters survive. Esc or the backdrop closes it.
+              if (open != null)
+                GameSheet(
+                  key: ValueKey('sheet-${open.appid}'),
+                  game: open,
+                  coverPath: _artwork[open.appid],
+                  engine: widget.engine,
+                  startAtInstall: _openForInstall,
+                  component: _component,
+                  onOpenInstall: (route) => setState(() => _component = route),
+                  onComponentDone: () => setState(() => _component = null),
+                  onClose:
+                      () => setState(() {
+                        _open = null;
+                        _openForInstall = false;
+                        _component = null;
+                      }),
+                  onChanged: _scan,
+                  onLoaded: widget.onGameReady,
                 ),
-                _StatusBar(
-                  message: _statusOverride ?? context.t(_statusKey, _statusValues),
-                  busy: _busy,
-                  failed: _failed,
-                  trailing: _open?.name,
-                ),
-              ],
-            ),
+            ],
           ),
-        ],
-      ),
-          // The sheet floats over the library rather than replacing it, so the
-          // scroll position and filters survive. Esc or the backdrop closes it.
-          if (open != null)
-            GameSheet(
-              key: ValueKey('sheet-${open.appid}'),
-              game: open,
-              coverPath: _artwork[open.appid],
-              engine: widget.engine,
-              startAtInstall: _openForInstall,
-              component: _component,
-              onOpenInstall: (route) => setState(() => _component = route),
-              onComponentDone: () => setState(() => _component = null),
-              onClose: () => setState(() {
-                _open = null;
-                _openForInstall = false;
-                _component = null;
-              }),
-              onChanged: _scan,
-              onLoaded: widget.onGameReady,
-            ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -434,10 +531,11 @@ class _ShellState extends State<Shell> {
           engine: widget.engine,
           games: games,
           artwork: _artwork,
-          onOpen: (game) => setState(() {
-            _open = game;
-            _openForInstall = false;
-          }),
+          onOpen:
+              (game) => setState(() {
+                _open = game;
+                _openForInstall = false;
+              }),
           onAddFolder: _addFolder,
           onRescan: _scan,
         );
@@ -447,10 +545,11 @@ class _ShellState extends State<Shell> {
           games: games,
           filter: _filter,
           onFilter: (value) => setState(() => _filter = value),
-          onOpen: (game, {bool install = false}) => setState(() {
-            _open = game;
-            _openForInstall = install;
-          }),
+          onOpen:
+              (game, {bool install = false}) => setState(() {
+                _open = game;
+                _openForInstall = install;
+              }),
           onOpenFolder: _openFolder,
           onRescan: _scan,
           engine: widget.engine,
@@ -463,7 +562,6 @@ class _ShellState extends State<Shell> {
         return HistoryView(
           key: const ValueKey('history'),
           engine: widget.engine,
-          onChanged: _scan,
         );
       case AppView.about:
         return AboutView(key: const ValueKey('about'), version: _version);
@@ -501,78 +599,94 @@ class _Sidebar extends StatelessWidget {
         border: Border.all(color: AppColors.stroke(context)),
         // Two shadows: a tight one that seats the panel and a wide soft one that
         // lifts it. A single mid-sized shadow vanishes against a near-black page.
-        boxShadow: dark
-            ? const [
-                BoxShadow(color: Color(0x8C000000), blurRadius: 5, offset: Offset(0, 2)),
-                BoxShadow(color: Color(0x99000000), blurRadius: 60, offset: Offset(0, 26)),
-              ]
-            : const [
-                BoxShadow(color: Color(0x1A14202D), blurRadius: 40, offset: Offset(0, 18)),
-              ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.lg,
-              AppSpace.xl,
-              AppSpace.lg,
-              AppSpace.md,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(context.t('app.title'), style: AppText.title),
-                const SizedBox(height: 2),
-                Text(
-                  context.t('app.subtitle'),
-                  style: AppText.caption.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+        boxShadow:
+            dark
+                ? const [
+                  BoxShadow(
+                    color: Color(0x8C000000),
+                    blurRadius: 5,
+                    offset: Offset(0, 2),
                   ),
+                  BoxShadow(
+                    color: Color(0x99000000),
+                    blurRadius: 60,
+                    offset: Offset(0, 26),
+                  ),
+                ]
+                : const [
+                  BoxShadow(
+                    color: Color(0x1A14202D),
+                    blurRadius: 40,
+                    offset: Offset(0, 18),
+                  ),
+                ],
+      ),
+      child: FocusTraversalGroup(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.lg,
+                  AppSpace.xl,
+                  AppSpace.lg,
+                  AppSpace.md,
                 ),
-              ],
-            ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(context.t('app.title'), style: AppText.title),
+                    const SizedBox(height: 2),
+                    Text(
+                      context.t('app.subtitle'),
+                      style: AppText.caption.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _NavItem(
+                icon: Icons.home_outlined,
+                label: context.t('nav.home'),
+                selected: current == AppView.home,
+                onTap: disabled ? null : () => onSelect(AppView.home),
+              ),
+              _NavItem(
+                icon: Icons.videogame_asset_outlined,
+                label: context.t('nav.games'),
+                selected: current == AppView.games,
+                onTap: disabled ? null : () => onSelect(AppView.games),
+              ),
+              _NavItem(
+                icon: Icons.extension_outlined,
+                label: context.t('nav.addons'),
+                selected: current == AppView.addons,
+                onTap: disabled ? null : () => onSelect(AppView.addons),
+              ),
+              _NavItem(
+                icon: Icons.history,
+                label: context.t('nav.history'),
+                selected: current == AppView.history,
+                onTap: disabled ? null : () => onSelect(AppView.history),
+              ),
+              _NavItem(
+                icon: Icons.tune,
+                label: context.t('nav.settings'),
+                selected: current == AppView.settings,
+                onTap: disabled ? null : () => onSelect(AppView.settings),
+              ),
+              _NavItem(
+                icon: Icons.info_outline,
+                label: context.t('nav.about'),
+                selected: current == AppView.about,
+                onTap: disabled ? null : () => onSelect(AppView.about),
+              ),
+              const SizedBox(height: AppSpace.md),
+            ],
           ),
-          _NavItem(
-            icon: Icons.home_outlined,
-            label: context.t('nav.home'),
-            selected: current == AppView.home,
-            onTap: disabled ? null : () => onSelect(AppView.home),
-          ),
-          _NavItem(
-            icon: Icons.videogame_asset_outlined,
-            label: context.t('nav.games'),
-            selected: current == AppView.games,
-            onTap: disabled ? null : () => onSelect(AppView.games),
-          ),
-          _NavItem(
-            icon: Icons.extension_outlined,
-            label: context.t('nav.addons'),
-            selected: current == AppView.addons,
-            onTap: disabled ? null : () => onSelect(AppView.addons),
-          ),
-          _NavItem(
-            icon: Icons.history,
-            label: context.t('nav.history'),
-            selected: current == AppView.history,
-            onTap: disabled ? null : () => onSelect(AppView.history),
-          ),
-          _NavItem(
-            icon: Icons.tune,
-            label: context.t('nav.settings'),
-            selected: current == AppView.settings,
-            onTap: disabled ? null : () => onSelect(AppView.settings),
-          ),
-          _NavItem(
-            icon: Icons.info_outline,
-            label: context.t('nav.about'),
-            selected: current == AppView.about,
-            onTap: disabled ? null : () => onSelect(AppView.about),
-          ),
-          const Spacer(),
-
-        ],
+        ),
       ),
     );
   }
@@ -599,6 +713,7 @@ class _NavItem extends StatefulWidget {
 
 class _NavItemState extends State<_NavItem> {
   bool _hover = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
@@ -612,48 +727,69 @@ class _NavItemState extends State<_NavItem> {
         cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: AppMotion.resolve(context, AppMotion.fast),
-            curve: AppMotion.settle,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.md,
-              vertical: AppSpace.sm + 1,
-            ),
-            decoration: BoxDecoration(
-              color: selected
-                  ? theme.colorScheme.primary.withValues(alpha: 0.14)
-                  : _hover
-                      ? theme.colorScheme.onSurface.withValues(alpha: 0.05)
-                      : Colors.transparent,
-              borderRadius: BorderRadius.circular(AppSpace.radius),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  widget.icon,
-                  size: 17,
-                  color: !enabled
-                      ? theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4)
-                      : selected
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.onSurfaceVariant,
+        child: Semantics(
+          button: true,
+          selected: selected,
+          enabled: enabled,
+          child: InkWell(
+            onTap: widget.onTap,
+            onFocusChange: (value) => setState(() => _focused = value),
+            borderRadius: BorderRadius.circular(AppSpace.radius),
+            child: AnimatedContainer(
+              duration: AppMotion.resolve(context, AppMotion.fast),
+              curve: AppMotion.settle,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.md,
+                vertical: AppSpace.sm + 1,
+              ),
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color:
+                      _focused ? theme.colorScheme.primary : Colors.transparent,
+                  width: 2,
                 ),
-                const SizedBox(width: AppSpace.md),
-                Text(
-                  widget.label,
-                  style: AppText.label.copyWith(
-                    color: !enabled
-                        ? theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4)
-                        : selected
+                color:
+                    selected
+                        ? theme.colorScheme.primary.withValues(alpha: 0.14)
+                        : _hover
+                        ? theme.colorScheme.onSurface.withValues(alpha: 0.05)
+                        : Colors.transparent,
+                borderRadius: BorderRadius.circular(AppSpace.radius),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    widget.icon,
+                    size: 17,
+                    color:
+                        !enabled
+                            ? theme.colorScheme.onSurfaceVariant.withValues(
+                              alpha: 0.4,
+                            )
+                            : selected
                             ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurface,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                            : theme.colorScheme.onSurfaceVariant,
                   ),
-                ),
-              ],
+                  const SizedBox(width: AppSpace.md),
+                  Expanded(
+                    child: Text(
+                      widget.label,
+                      style: AppText.label.copyWith(
+                        color:
+                            !enabled
+                                ? theme.colorScheme.onSurfaceVariant.withValues(
+                                  alpha: 0.4,
+                                )
+                                : selected
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.onSurface,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -677,13 +813,19 @@ class _EngineFailure extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.terminal, size: 36, color: theme.colorScheme.onSurfaceVariant),
+            Icon(
+              Icons.terminal,
+              size: 36,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(height: AppSpace.lg),
             Text(context.t('engine.failedTitle'), style: AppText.title),
             const SizedBox(height: AppSpace.sm),
             SelectableText(
               message,
-              style: AppText.mono.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: AppText.mono.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpace.lg),
@@ -716,7 +858,8 @@ class _StatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tone = failed ? AppColors.danger(context) : theme.colorScheme.onSurfaceVariant;
+    final tone =
+        failed ? AppColors.danger(context) : theme.colorScheme.onSurfaceVariant;
 
     return Container(
       decoration: BoxDecoration(

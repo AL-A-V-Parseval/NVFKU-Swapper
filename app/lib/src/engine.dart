@@ -13,11 +13,25 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
+import 'install_task.dart';
 import 'l10n.dart';
 import 'models.dart';
 
 /// Thrown when the engine exits non-zero. Carries stderr, which the engine uses
 /// for refusals and blockers, so the UI can show the real reason.
+/// A settings document and whether the file behind it exists yet.
+class SettingsDocument {
+  const SettingsDocument({required this.settings, required this.stored});
+
+  final Map<String, dynamic> settings;
+
+  /// False when no settings file has been written: every field is then a default,
+  /// and a caller applying preferences should leave existing values alone.
+  final bool stored;
+}
+
 class EngineException implements Exception {
   EngineException(this.message, {this.exitCode = -1});
 
@@ -29,16 +43,61 @@ class EngineException implements Exception {
 }
 
 /// Locates and runs `python -m nvfku`.
-class Engine {
-  Engine({String? projectRoot, String? pythonOverride})
-      : projectRoot = projectRoot ?? _defaultProjectRoot(),
-        _pythonOverride = pythonOverride;
+class Engine implements EngineLike {
+  Engine({String? projectRoot, String? pythonOverride, String? stateDir})
+    : projectRoot = projectRoot ?? _defaultProjectRoot(),
+      _pythonOverride = pythonOverride,
+      _stateDir = stateDir;
 
   /// The checkout root, i.e. the directory containing `engine/`.
   final String projectRoot;
   final String? _pythonOverride;
 
+  /// An alternate state directory, passed through as `--state-dir`.
+  ///
+  /// The engine already had this flag; the UI had no way to reach it, which meant
+  /// anything with its own state — a test, or a second profile — would have written
+  /// to the real `~/.local/share/nvfku`. Threading it here is what lets a test assert
+  /// on persistence without touching the user's settings.
+  final String? _stateDir;
+
   String? _resolvedPython;
+  final Map<(String, String), InstallTask> _installations = {};
+  final ValueNotifier<int> _revision = ValueNotifier(0);
+
+  /// Changes after an install succeeds or a rollback may have changed state.
+  ValueListenable<int> get revision => _revision;
+
+  InstallTask installationFor(String gameKey, String route) =>
+      _installations.putIfAbsent((gameKey, route), () {
+        final task = InstallTask();
+        var seen = task.completion;
+        task.addListener(() {
+          if (task.completion == seen) return;
+          seen = task.completion;
+          if (task.result != null && task.result!.refusal == null) {
+            _revision.value++;
+          }
+        });
+        return task;
+      });
+
+  void startInstallation({
+    required String gameKey,
+    required String route,
+    int? workingScale,
+  }) {
+    if (_installations.entries.any(
+      (entry) => entry.key.$1 == gameKey && entry.value.running,
+    )) {
+      throw EngineException(
+        'An installation for this game is already running.',
+      );
+    }
+    installationFor(gameKey, route).start(
+      () => install(gameKey: gameKey, route: route, workingScale: workingScale),
+    );
+  }
 
   /// Walks up from the executable looking for `engine/nvfku`. A build run
   /// from the project directory finds the checkout; an installed build relies
@@ -91,10 +150,10 @@ class Engine {
   }
 
   Map<String, String> get _environment => {
-        ...Platform.environment,
-        'PYTHONPATH': '$projectRoot/engine',
-        'PYTHONDONTWRITEBYTECODE': '1',
-      };
+    ...Platform.environment,
+    'PYTHONPATH': '$projectRoot/engine',
+    'PYTHONDONTWRITEBYTECODE': '1',
+  };
 
   /// The language the engine should produce user-facing text in.
   ///
@@ -104,14 +163,53 @@ class Engine {
   static String get textLanguage =>
       appLanguage.value == AppLanguage.chinese ? 'zh' : 'en';
 
+  /// Only process startup failures are translated here; programming errors are
+  /// not hidden behind a generic catch.
+  Future<ProcessResult> _run(List<String> arguments) async {
+    try {
+      return await Process.run(
+        python,
+        arguments,
+        workingDirectory: projectRoot,
+        environment: _environment,
+      );
+    } on ProcessException catch (error) {
+      throw EngineException(
+        'Cannot start engine: ${error.message}',
+        exitCode: error.errorCode,
+      );
+    }
+  }
+
+  /// Decode at the engine seam, so malformed field types cannot escape into UI
+  /// state machines. Catch only contract errors from this decoding closure.
+  Future<T> _decode<T>(
+    List<String> arguments,
+    T Function(dynamic) decode,
+  ) async {
+    final data = await _json(arguments);
+    try {
+      return decode(data);
+    } on TypeError catch (error) {
+      throw EngineException(
+        'Invalid engine document (${arguments.first}): $error',
+      );
+    } on FormatException catch (error) {
+      throw EngineException(
+        'Invalid engine document (${arguments.first}): $error',
+      );
+    }
+  }
+
   /// Runs a command to completion and decodes its JSON stdout.
   Future<dynamic> _json(List<String> arguments) async {
-    final result = await Process.run(
-      python,
-      ['-m', 'nvfku', '--json', ...arguments],
-      workingDirectory: projectRoot,
-      environment: _environment,
-    );
+    final result = await _run([
+      '-m',
+      'nvfku',
+      '--json',
+      if (_stateDir != null) ...['--state-dir', _stateDir],
+      ...arguments,
+    ]);
     final stdoutText = (result.stdout as String).trim();
     final stderrText = (result.stderr as String).trim();
 
@@ -166,12 +264,7 @@ class Engine {
   /// it prints a bare line rather than a JSON document and cannot go through
   /// `_json`.
   Future<String> version() async {
-    final result = await Process.run(
-      python,
-      ['-m', 'nvfku', '--version'],
-      workingDirectory: projectRoot,
-      environment: _environment,
-    );
+    final result = await _run(['-m', 'nvfku', '--version']);
     final text = (result.stdout as String).trim();
     if (text.isEmpty) {
       throw EngineException(
@@ -184,60 +277,88 @@ class Engine {
     return text;
   }
 
-  Future<List<Game>> scan() async {
-    final data = await _json(['--language', textLanguage, 'scan']);
-    return (data as List<dynamic>)
+  Future<List<Game>> scan() => _decode(
+    ['--language', textLanguage, 'scan'],
+    (data) => (data as List<dynamic>)
         .map((e) => Game.fromJson(e as Map<String, dynamic>))
-        .toList(growable: false);
-  }
+        .toList(growable: false),
+  );
 
   Future<List<RoutePlan>> plan(String gameKey, {String? route}) async {
     final args = <String>['--language', textLanguage, 'plan', gameKey];
     if (route != null) args.add(route);
-    final data = await _json(args);
-    return (data as List<dynamic>)
-        .map((e) => RoutePlan.fromJson(e as Map<String, dynamic>))
-        .toList(growable: false);
+    return _decode(
+      args,
+      (data) => (data as List<dynamic>)
+          .map((e) => RoutePlan.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false),
+    );
   }
 
   Future<List<ProviderRow>> providers({bool resolve = true}) async {
-    final data = await _json(resolve ? ['providers', '--resolve'] : ['providers']);
-    return (data as List<dynamic>)
-        .map((e) => ProviderRow.fromJson(e as Map<String, dynamic>))
-        .toList(growable: false);
+    return _decode(
+      resolve ? ['providers', '--resolve'] : ['providers'],
+      (data) => (data as List<dynamic>)
+          .map((e) => ProviderRow.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false),
+    );
   }
 
   Future<List<JournalEntry>> backups({String? gameKey}) async {
-    final data = await _json(gameKey == null ? ['backups'] : ['backups', gameKey]);
-    return (data as List<dynamic>)
-        .map((e) => JournalEntry.fromJson(e as Map<String, dynamic>))
-        .toList(growable: false);
+    return _decode(
+      gameKey == null ? ['backups'] : ['backups', gameKey],
+      (data) => (data as List<dynamic>)
+          .map((e) => JournalEntry.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false),
+    );
   }
 
   /// Registers a game folder Steam does not manage.
   Future<void> addGameFolder(String folder) async {
-    final data = await _json(['games', folder]);
-    final document = data as Map<String, dynamic>;
-    if (document['ok'] != true) {
-      throw EngineException(document['error'] as String? ?? 'the folder was refused');
-    }
+    await _decode(['games', folder], (data) {
+      final document = data as Map<String, dynamic>;
+      if (document['ok'] != true) {
+        throw EngineException(_refusalFrom(document, 'the folder was refused'));
+      }
+    });
   }
 
   /// Reverts one journal. Returns the engine's own report of what it put back.
   Future<String> rollback(String journalId) async {
-    final data = await _json(['rollback', journalId]);
-    if (data is Map<String, dynamic> && data['ok'] == false) {
-      throw EngineException(
-        _refusalFrom(data, 'the journal could not be reverted'),
-      );
+    String? failure;
+    try {
+      final data = await _json(['rollback', journalId]);
+      if (data is! Map<String, dynamic>) {
+        throw EngineException('the engine returned an invalid rollback report');
+      }
+      if (data['ok'] != true) {
+        final failures = data['failed'];
+        throw EngineException(
+          failures is List && failures.isNotEmpty
+              ? failures.join('\n')
+              : _refusalFrom(data, 'the journal could not be reverted'),
+        );
+      }
+      final report = data['report'];
+      if (report is! List || report.any((line) => line is! String)) {
+        throw EngineException('the engine returned an invalid rollback report');
+      }
+      return report.join('\n');
+    } on ProcessException catch (error) {
+      failure = error.message;
+      throw EngineException(error.message, exitCode: error.errorCode);
+    } catch (error) {
+      failure = error.toString();
+      rethrow;
+    } finally {
+      // Even a refusal or an unreadable report cannot prove the files stayed
+      // unchanged. Invalidate only this journal's receipt and re-read state;
+      // never present a failed/partial restore as a successful installation.
+      for (final task in _installations.values) {
+        task.clearRolledBackResult(journalId, error: failure);
+      }
+      _revision.value++;
     }
-    if (data is Map<String, dynamic>) {
-      final report = data['report'] ?? data['message'];
-      if (report is String && report.isNotEmpty) return report;
-      final restored = data['restored'];
-      if (restored is int) return 'restored $restored file(s)';
-    }
-    return 'reverted $journalId';
   }
 
   /// The artwork already on disk, keyed by appid. Never fetches.
@@ -246,21 +367,25 @@ class Engine {
   /// and a download per missing cover would make the grid's first paint depend on
   /// the network. A missing entry is a game that gets the initials placeholder.
   Future<Map<String, String?>> cachedArtwork() async {
-    final data = await _json(['artwork', '--cached-only']);
-    final document = data as Map<String, dynamic>;
-    final artwork = document['artwork'] as Map<String, dynamic>? ?? const {};
-    return {
-      for (final entry in artwork.entries)
-        entry.key: entry.value is String && (entry.value as String).isNotEmpty
-            ? entry.value as String
-            : null,
-    };
+    return _decode(['artwork', '--cached-only'], (data) {
+      final document = data as Map<String, dynamic>;
+      final artwork = document['artwork'] as Map<String, dynamic>;
+      return {
+        for (final entry in artwork.entries)
+          entry.key:
+              entry.value is String && (entry.value as String).isNotEmpty
+                  ? entry.value as String
+                  : null,
+      };
+    });
   }
 
   /// Reads a game's current Steam launch options.
   Future<LaunchOptionsState> launchOptions(String gameKey) async {
-    final data = await _json(['launch-options', gameKey]);
-    return LaunchOptionsState.fromJson(data as Map<String, dynamic>);
+    return _decode([
+      'launch-options',
+      gameKey,
+    ], (data) => LaunchOptionsState.fromJson(data as Map<String, dynamic>));
   }
 
   /// Writes or clears a game's launch options. Steam must not be running.
@@ -281,18 +406,60 @@ class Engine {
     } else if (route != null) {
       args.addAll(['--route', route]);
     }
-    final data = await _json(args);
-    final document = data as Map<String, dynamic>;
-    if (document['ok'] == false) {
-      throw EngineException(_refusalFrom(document, 'the launch options were refused'));
-    }
-    return LaunchOptionsWrite.fromJson(document);
+    return _decode(args, (data) {
+      final document = data as Map<String, dynamic>;
+      if (document['ok'] == false) {
+        throw EngineException(
+          _refusalFrom(document, 'the launch options were refused'),
+        );
+      }
+      return LaunchOptionsWrite.fromJson(document);
+    });
   }
 
   /// The persisted settings document.
-  Future<Map<String, dynamic>> readSettings() async {
-    final data = await _json(['settings']);
-    return (data as Map<String, dynamic>)['settings'] as Map<String, dynamic>? ?? {};
+  ///
+  /// Every field has a working default, so this cannot say whether a value was
+  /// chosen or merely defaulted. Use [readSettingsDocument] when that matters.
+  Future<Map<String, dynamic>> readSettings() async =>
+      (await readSettingsDocument()).settings;
+
+  /// The settings document, plus whether anything was actually stored.
+  ///
+  /// `stored` is false until the file exists. It is the only way to tell an
+  /// explicitly-chosen `system` from a profile that has never been written, and a
+  /// preference loader that cannot tell them apart overwrites a deliberate choice
+  /// on first run — which is exactly what a test caught here.
+  @override
+  Future<SettingsDocument> readSettingsDocument() async {
+    return _decode(['settings'], (document) {
+      final data = document as Map<String, dynamic>;
+      final settings = data['settings'] as Map<String, dynamic>;
+      _validateSettings(settings);
+      return SettingsDocument(
+        settings: settings,
+        stored: data['stored'] as bool? ?? false,
+      );
+    });
+  }
+
+  static void _validateSettings(Map<String, dynamic> settings) {
+    for (final field in [
+      'python_path',
+      'steam_root',
+      'download_cache',
+      'proxy_mode',
+      'theme',
+      'language',
+    ]) {
+      if (settings[field] != null && settings[field] is! String) {
+        throw FormatException('settings.$field must be a string');
+      }
+    }
+    if (settings['verify_upstream'] != null &&
+        settings['verify_upstream'] is! bool) {
+      throw const FormatException('settings.verify_upstream must be a boolean');
+    }
   }
 
   /// Saves settings. Only the provided fields change; null leaves one alone.
@@ -303,6 +470,8 @@ class Engine {
     String? proxyMode,
     bool? verifyUpstream,
     String? routePreference,
+    String? theme,
+    String? language,
   }) async {
     final args = <String>['settings'];
     if (pythonPath != null) args.addAll(['--python', pythonPath]);
@@ -312,13 +481,22 @@ class Engine {
     if (verifyUpstream != null) {
       args.addAll(['--verify-upstream', verifyUpstream ? 'yes' : 'no']);
     }
-    if (routePreference != null) args.addAll(['--route-preference', routePreference]);
-    final data = await _json(args);
-    final document = data as Map<String, dynamic>;
-    if (document['ok'] == false) {
-      throw EngineException(_refusalFrom(document, 'the settings were refused'));
+    if (routePreference != null) {
+      args.addAll(['--route-preference', routePreference]);
     }
-    return document['settings'] as Map<String, dynamic>? ?? {};
+    if (theme != null) args.addAll(['--theme', theme]);
+    if (language != null) args.addAll(['--language', language]);
+    return _decode(args, (data) {
+      final document = data as Map<String, dynamic>;
+      if (document['ok'] == false) {
+        throw EngineException(
+          _refusalFrom(document, 'the settings were refused'),
+        );
+      }
+      final settings = document['settings'] as Map<String, dynamic>;
+      _validateSettings(settings);
+      return settings;
+    });
   }
 
   /// Applies a route, reporting progress as it goes.
@@ -337,10 +515,15 @@ class Engine {
     bool verifyUpstream = true,
   }) {
     final args = <String>[
-      '-m', 'nvfku',
+      '-m',
+      'nvfku',
       '--json',
-      '--language', textLanguage,
-      'install', gameKey, route,
+      '--language',
+      textLanguage,
+      if (_stateDir != null) ...['--state-dir', _stateDir],
+      'install',
+      gameKey,
+      route,
       if (yes) '--yes',
       if (skipDownload) '--skip-download',
       if (!verifyUpstream) '--no-upstream-verify',
@@ -348,8 +531,11 @@ class Engine {
     ];
 
     late StreamController<InstallEvent> controller;
-    Process? process;
     final stdoutBuffer = StringBuffer();
+
+    void emit(InstallEvent event) {
+      if (!controller.isClosed) controller.add(event);
+    }
 
     Future<void> close() async {
       if (!controller.isClosed) await controller.close();
@@ -357,7 +543,8 @@ class Engine {
 
     controller = StreamController<InstallEvent>(
       onListen: () async {
-        controller.add(const InstallEvent(phase: 'start', message: ''));
+        emit(const InstallEvent(phase: 'start', message: ''));
+        late final Process process;
         try {
           process = await Process.start(
             python,
@@ -366,37 +553,42 @@ class Engine {
             environment: _environment,
           );
         } on ProcessException catch (error) {
-          controller.add(InstallEvent(phase: 'failed', message: error.message));
+          emit(InstallEvent(phase: 'failed', message: error.message));
           await close();
           return;
         }
 
         final decoder = const Utf8Decoder(allowMalformed: true);
-        final stderrDone = process!.stderr
+        final stderrDone = process.stderr
             .transform(decoder)
             .transform(const LineSplitter())
             .listen((line) {
-          final text = line.trim();
-          if (text.isEmpty) return;
-          // Progress narration. It is deliberately *not* an error channel: the
-          // engine prints step lines here even on a successful install.
-          controller.add(InstallEvent(phase: 'log', message: text));
-        });
+              final text = line.trim();
+              if (text.isEmpty) return;
+              // Progress narration. It is deliberately *not* an error channel: the
+              // engine prints step lines here even on a successful install.
+              emit(InstallEvent(phase: 'log', message: text));
+            });
 
-        final stdoutDone = process!.stdout
+        final stdoutDone = process.stdout
             .transform(decoder)
             .transform(const LineSplitter())
             .listen(stdoutBuffer.writeln);
 
-        await Future.wait([stderrDone.asFuture<void>(), stdoutDone.asFuture<void>()]);
-        final exitCode = await process!.exitCode;
+        await Future.wait([
+          stderrDone.asFuture<void>(),
+          stdoutDone.asFuture<void>(),
+        ]);
+        final exitCode = await process.exitCode;
         final raw = stdoutBuffer.toString().trim();
 
         if (raw.isEmpty) {
-          controller.add(InstallEvent(
-            phase: 'failed',
-            message: 'the engine produced no document (exit $exitCode)',
-          ));
+          emit(
+            InstallEvent(
+              phase: 'failed',
+              message: 'the engine produced no document (exit $exitCode)',
+            ),
+          );
           await close();
           return;
         }
@@ -405,10 +597,12 @@ class Engine {
         try {
           document = jsonDecode(raw);
         } on FormatException {
-          controller.add(InstallEvent(
-            phase: 'failed',
-            message: 'the engine produced output that is not JSON',
-          ));
+          emit(
+            InstallEvent(
+              phase: 'failed',
+              message: 'the engine produced output that is not JSON',
+            ),
+          );
           await close();
           return;
         }
@@ -417,33 +611,41 @@ class Engine {
           // A refusal carries a sentence the user can act on; a bare exit code does
           // not. `--yes` is passed, so the only refusals left are real ones:
           // blockers, a running Steam, a digest mismatch.
-          controller.add(InstallEvent(
-            phase: 'failed',
-            message: _refusalFrom(
-              document,
-              'the install was refused (exit $exitCode)',
+          emit(
+            InstallEvent(
+              phase: 'failed',
+              message: _refusalFrom(
+                document,
+                'the install was refused (exit $exitCode)',
+              ),
             ),
-          ));
+          );
           await close();
           return;
         }
 
-        final result = document['result'];
-        controller.add(InstallEvent(
-          phase: 'done',
-          message: '',
-          result: result is Map<String, dynamic>
-              ? InstallResult.fromJson(result)
-              : null,
-        ));
-        await close();
+        try {
+          final result = InstallResult.fromJson(
+            document['result'] as Map<String, dynamic>,
+          );
+          emit(InstallEvent(phase: 'done', message: '', result: result));
+        } on TypeError catch (error) {
+          emit(
+            InstallEvent(
+              phase: 'failed',
+              message:
+                  EngineException(
+                    'Invalid engine install result: $error',
+                  ).message,
+            ),
+          );
+        } finally {
+          await close();
+        }
       },
-      onCancel: () async {
-        // The child would otherwise outlive the sheet that started it and keep
-        // writing into a game directory nobody is watching.
-        process?.kill(ProcessSignal.sigterm);
-        process = null;
-      },
+      // Installation is owned by Engine.installationFor, not by the sheet.
+      // The UI never cancels this stream on navigation: an explicit cancel
+      // operation would need to wait for Python's journal compensation first.
     );
     return controller.stream;
   }

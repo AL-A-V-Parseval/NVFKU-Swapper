@@ -143,6 +143,11 @@ class Game:
     reshade_files: list[Path] = field(default_factory=list)
     size_on_disk: int | None = None
     source: str = "steam"
+    detection_complete: bool | None = None
+    """None means not scanned; False means discovery stopped short."""
+    detection_warnings: list[str] = field(default_factory=list)
+    detection_directories: int = 0
+    detection_entries: int = 0
 
     @property
     def reshade_installed(self) -> bool:
@@ -197,6 +202,10 @@ class Game:
             "nvngx_dlssnr": [str(p) for p in self.nvngx_dlssnr],
             "reshade_files": [str(p) for p in self.reshade_files],
             "source": self.source,
+            "detection_complete": self.detection_complete,
+            "detection_warnings": self.detection_warnings,
+            "detection_directories": self.detection_directories,
+            "detection_entries": self.detection_entries,
         }
 
 
@@ -365,7 +374,7 @@ def _maybe_main_score(path: Path) -> int:
     return score
 
 
-def choose_launch_exe(game_dir: Path) -> tuple[Path | None, PEFile | None]:
+def choose_launch_exe(game_dir: Path, *, candidates: list[Path] | None = None) -> tuple[Path | None, PEFile | None]:
     """Pick the executable ReShade should attach to.
 
     Ranking is by *evidence*, not by size: a game's root executable is often a
@@ -377,7 +386,9 @@ def choose_launch_exe(game_dir: Path) -> tuple[Path | None, PEFile | None]:
     """
     fallback: tuple[Path, PEFile | None] | None = None
 
-    for candidate in _candidate_executables(game_dir):
+    if candidates is None:
+        candidates = _candidate_executables(game_dir)
+    for candidate in candidates:
         pe = read_pe(candidate)
         if pe is None or pe.is_dll:
             continue
@@ -388,7 +399,6 @@ def choose_launch_exe(game_dir: Path) -> tuple[Path | None, PEFile | None]:
             return candidate, pe
     if fallback is not None:
         return fallback
-    candidates = _candidate_executables(game_dir, max_candidates=1)
     return (candidates[0], read_pe(candidates[0])) if candidates else (None, None)
 
 
@@ -440,7 +450,7 @@ def proton_tool_for(steam_root: Path, prefix: Path) -> str | None:
     return None
 
 
-def scan_steam_game(library: Path, appmanifest: Path, steam_root: Path) -> Game | None:
+def scan_steam_game(library: Path, appmanifest: Path, steam_root: Path, *, max_directories: int = 4096, max_entries: int = 100_000, budget_seconds: float = 2.0) -> Game | None:
     try:
         manifest = parse_vdf(appmanifest.read_text(encoding="utf-8", errors="replace"))
     except OSError:
@@ -463,9 +473,11 @@ def scan_steam_game(library: Path, appmanifest: Path, steam_root: Path) -> Game 
         steam_root=steam_root,
         proton_prefix=prefix if prefix.is_dir() else None,
         proton_tool=proton_tool_for(steam_root, prefix) if prefix.is_dir() else None,
-        size_on_disk=_dir_size_bounded(game_dir, int(state.get("SizeOnDisk") or 0)),
+        # Pruned renderer discovery cannot establish total payload size. Do not
+        # add a second tree walk just to manufacture a partial size estimate.
+        size_on_disk=int(state.get("SizeOnDisk") or 0) or None,
     )
-    _detect_into(game)
+    _detect_into(game, max_directories=max_directories, max_entries=max_entries, budget_seconds=budget_seconds)
     return game
 
 
@@ -508,23 +520,74 @@ def _is_backup_path(path: Path, game_dir: Path) -> bool:
     return any(part.lower() in _BACKUP_DIR_MARKERS for part in relative.parts[:-1])
 
 
-def _detect_into(game: Game) -> None:
-    exe, pe = choose_launch_exe(game.install_dir)
+def _inventory_game(game: Game, *, max_directories: int = 4096, max_entries: int = 100_000, budget_seconds: float = 2.0) -> list[Path]:
+    """Collect renderer candidates and live DLL evidence in one pruned walk."""
+    if max_directories < 1 or max_entries < 1 or budget_seconds < 0:
+        raise ValueError("discovery counts must be positive and time budget nonnegative")
+    deadline = time.monotonic() + budget_seconds
+    exes = []
+    names = {"nvngx_dlss.dll", "nvngx_dlssg.dll", "nvngx_dlssd.dll"}
+    stack = [(game.install_dir, 0)]
+    game.detection_complete = True
+    game.detection_directories = 0
+    game.detection_entries = 0
+    while stack:
+        if time.monotonic() >= deadline:
+            game.detection_complete = False
+            game.detection_warnings.append("game discovery incomplete: time budget exhausted")
+            break
+        if game.detection_directories >= max_directories:
+            game.detection_complete = False
+            game.detection_warnings.append("game discovery incomplete: directory budget exhausted")
+            break
+        directory, depth = stack.pop()
+        game.detection_directories += 1
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if game.detection_entries >= max_entries or time.monotonic() >= deadline:
+                        reason = "entry budget" if game.detection_entries >= max_entries else "time budget"
+                        game.detection_complete = False
+                        game.detection_warnings.append(f"game discovery incomplete: {reason} exhausted")
+                        stack.clear()
+                        break
+                    game.detection_entries += 1
+                    lower = entry.name.lower()
+                    path = Path(entry.path)
+                    if entry.is_dir(follow_symlinks=False):
+                        # Plugins can carry live DLSS DLLs even though their
+                        # helper executables must not become launch candidates.
+                        if lower not in (_PRUNE_DIRS - {"plugins", "mods", "config"}) and lower not in _BACKUP_DIR_MARKERS:
+                            stack.append((path, depth + 1))
+                        continue
+                    if not entry.is_file():
+                        continue
+                    if lower in names:
+                        game.native_dlss.append(path)
+                    elif lower == "nvngx_dlssnr.dll":
+                        game.nvngx_dlssnr.append(path)
+                    elif lower == "reshade.ini":
+                        game.reshade_files.append(path)
+                    elif (depth <= _MAX_EXE_DEPTH and lower.endswith(".exe")
+                          and not DEFAULT_EXE_EXCLUDES.search(entry.name)
+                          and not any(part.lower() in _PRUNE_DIRS
+                                      for part in path.relative_to(game.install_dir).parts[:-1])):
+                        exes.append(path)
+        except OSError as exc:
+            game.detection_complete = False
+            game.detection_warnings.append(f"game discovery could not read {directory}: {exc}")
+    return sorted(exes, key=lambda path: (-_maybe_main_score(path), len(str(path))))[:60]
+
+
+def _detect_into(game: Game, *, max_directories: int = 4096, max_entries: int = 100_000, budget_seconds: float = 2.0) -> None:
+    candidates = _inventory_game(game, max_directories=max_directories, max_entries=max_entries, budget_seconds=budget_seconds)
+    exe, pe = choose_launch_exe(game.install_dir, candidates=candidates)
     game.launch_exe = exe
     if pe is not None:
         game.bitness = pe.bitness
         api, evidence = classify_api(pe)
         game.rendering_api = api
         game.api_evidence = evidence
-
-    for name in ("nvngx_dlss.dll", "nvngx_dlssg.dll", "nvngx_dlssd.dll", "nvngx_dlssnr.dll"):
-        for found in game.install_dir.rglob(name):
-            if _is_backup_path(found, game.install_dir):
-                continue
-            if "nvngx_dlssnr" in name:
-                game.nvngx_dlssnr.append(found)
-            else:
-                game.native_dlss.append(found)
 
     # ReShade counts as installed only where it actually takes effect: a proxy
     # DLL *and* its ReShade.ini in the same directory, next to the executable.
@@ -535,13 +598,9 @@ def _detect_into(game: Game) -> None:
         has_ini = (candidate_dir / "ReShade.ini").is_file()
         present_dlls = [candidate_dir / name for name in RESHADE_DLL_NAMES if (candidate_dir / name).is_file()]
         if has_ini and present_dlls:
-            game.reshade_files.extend([candidate_dir / "ReShade.ini", *present_dlls])
-    for name in ("ReShade.ini",):
-        for found in game.install_dir.rglob(name):
-            if _is_backup_path(found, game.install_dir):
-                continue
-            if found not in game.reshade_files:
-                game.reshade_files.append(found)
+            for found in [candidate_dir / "ReShade.ini", *present_dlls]:
+                if found not in game.reshade_files:
+                    game.reshade_files.append(found)
 
     if game.rendering_api is None and any(
         (game.install_dir / marker).exists() for marker in ("UnityPlayer.dll", "UE4Game", "UE5")
@@ -550,7 +609,7 @@ def _detect_into(game: Game) -> None:
         game.api_evidence.append("engine-marker")
 
 
-def scan(paths: Paths) -> list[Game]:
+def scan(paths: Paths, *, max_directories: int = 4096, max_entries: int = 100_000, budget_seconds: float = 2.0) -> list[Game]:
     if paths.steam_root is None:
         return []
     games: list[Game] = []
@@ -561,7 +620,7 @@ def scan(paths: Paths) -> list[Game]:
         except OSError:
             continue
         for manifest in manifests:
-            game = scan_steam_game(library, manifest, paths.steam_root)
+            game = scan_steam_game(library, manifest, paths.steam_root, max_directories=max_directories, max_entries=max_entries, budget_seconds=budget_seconds)
             if game is not None and not is_non_game(game):
                 games.append(game)
     games.sort(key=lambda g: g.name.lower())
@@ -604,7 +663,8 @@ def is_non_game(game: Game) -> bool:
     if game.install_dir.name.lower() in _NON_GAME_INSTALL_DIRS:
         return True
     # A "game" whose directory holds no executable at all is a runtime payload.
-    return game.launch_exe is None and not game.native_dlss and not game.nvngx_dlssnr
+    return (game.detection_complete is not False and game.launch_exe is None
+            and not game.native_dlss and not game.nvngx_dlssnr)
 
 
 # --------------------------------------------------------------- scan cache
@@ -788,7 +848,8 @@ def scan_with_cache(paths: Paths, *, logger=None) -> list[Game]:
                     fresh[key] = {"stamp": stamp, "at": time.time(), "non_game": True}
                     continue
                 games.append(game)
-                fresh[key] = {"stamp": stamp, "at": time.time(), "game": game.to_dict()}
+                if game.detection_complete is not False:
+                    fresh[key] = {"stamp": stamp, "at": time.time(), "game": game.to_dict()}
 
     # Anything not rebuilt this run is dropped, so a removed game disappears.
     _save_cache(paths, fresh)
@@ -847,7 +908,10 @@ def scan_one(paths: Paths, needle: str) -> Game | None:
             fresh[key] = {"stamp": stamp, "at": time.time(), "non_game": True}
             _save_cache(paths, fresh)
             return None
-        fresh[key] = {"stamp": stamp, "at": time.time(), "game": game.to_dict()}
+        if game.detection_complete is not False:
+            fresh[key] = {"stamp": stamp, "at": time.time(), "game": game.to_dict()}
+        else:
+            fresh.pop(key, None)
         _save_cache(paths, fresh)
         return game
     return None
@@ -873,6 +937,10 @@ def _game_from_cache(data: dict) -> Game | None:
             nvngx_dlssnr=[Path(p) for p in data.get("nvngx_dlssnr") or []],
             reshade_files=[Path(p) for p in data.get("reshade_files") or []],
             source=str(data.get("source") or "steam"),
+            detection_complete=data.get("detection_complete"),
+            detection_warnings=list(data.get("detection_warnings") or []),
+            detection_directories=int(data.get("detection_directories") or 0),
+            detection_entries=int(data.get("detection_entries") or 0),
         )
     except (KeyError, TypeError, ValueError):
         return None

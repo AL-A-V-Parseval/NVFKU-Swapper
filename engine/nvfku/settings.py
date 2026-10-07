@@ -8,7 +8,8 @@ Two things the Linux tools need that Windows ones get from the OS:
     not be reached at all.
 *   **Persisted preferences.**  Which Python runs the engine, a non-standard
     Steam root, where the component cache lives, whether to reach the network
-    through a proxy, and whether to verify against the publisher's SHA256SUMS.
+    through a proxy, whether to verify against the publisher's SHA256SUMS, and the
+    interface language and colour scheme.
 
 Both live beside the journals under the engine state directory, so "where does
 this tool keep things" has one answer.  The settings file is deliberately a plain
@@ -17,6 +18,7 @@ JSON document the user can read and edit; nothing here is opaque.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -58,6 +60,44 @@ class Settings:
 
     #: Preferred route per game key, so re-opening a game remembers the choice.
     route_preference: dict[str, str] = field(default_factory=dict)
+
+    #: Interface colour scheme: ``system`` (follow the desktop), ``dark`` or ``light``.
+    #:
+    #: Stored rather than always following the desktop, because the two are not the
+    #: same request: a user on a light desktop may still want this window dark, and
+    #: the window has a header bar that has to be painted to match. Keeping the value
+    #: here is also what lets the GTK side and Flutter agree — the runner reads this
+    #: same preference from the desktop, and a stored override would otherwise make
+    #: them disagree.
+    theme: str = "system"
+
+    #: Interface language: ``system``, ``en`` or ``zh``.
+    #:
+    #: This was documented as stored for a while and was not — the picker wrote to an
+    #: in-memory notifier and the choice was gone on the next launch. It is stored now.
+    language: str = "system"
+
+    #: Values `theme` accepts. Kept beside the field so a validator, a CLI `choices`
+    #: list and this comment cannot drift apart.
+    THEMES = ("system", "dark", "light")
+    LANGUAGES = ("system", "en", "zh")
+
+    def validate(self) -> None:
+        """Reject a value the interface cannot honour.
+
+        Not silent coercion: `--theme ligth` quietly becoming `system` is the kind of
+        failure a user reports as "the setting does not stay", and it is far cheaper
+        to refuse it here.
+        """
+        if self.theme not in self.THEMES:
+            raise ValueError(
+                f"unknown theme {self.theme!r}; expected one of {', '.join(self.THEMES)}"
+            )
+        if self.language not in self.LANGUAGES:
+            raise ValueError(
+                f"unknown language {self.language!r}; "
+                f"expected one of {', '.join(self.LANGUAGES)}"
+            )
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -102,6 +142,28 @@ def save_settings(paths: Paths, settings: Settings) -> Path:
     path = settings_path(paths)
     atomic_write_text(path, settings.to_json())
     return path
+
+
+def update_settings(paths: Paths, **changes) -> Settings:
+    """Merge a field patch under a cross-process read/modify/write lock.
+
+    Atomic replacement alone does not prevent stale snapshots from losing other
+    writers' fields. Keep this stable lock inode even when the document changes.
+    Callers updating individual preferences should use this instead of saving a
+    previously read whole document.
+    """
+    unknown = set(changes) - set(Settings().to_dict())
+    if unknown:
+        raise ValueError(f"unknown settings fields: {', '.join(sorted(unknown))}")
+    lock = paths.ensure_state_dir() / "settings.lock"
+    with lock.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        current = load_settings(paths)
+        for name, value in changes.items():
+            setattr(current, name, value)
+        current.validate()
+        save_settings(paths, current)
+        return current
 
 
 # ------------------------------------------------------- manually added games

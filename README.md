@@ -22,6 +22,10 @@ constraints:
 | On Linux ReShade's proxy descriptors must be left native (`unwrap=0`), the opposite of the Windows default | the bridge config is where a naive port crashes |
 | Game directories on a dual-boot machine often already hold the proprietary model | it is discovered and classified by digest first, and downloaded only when nothing usable is present |
 
+## Latest release
+
+[v0.1.1](https://github.com/AL-A-V-Parseval/NVFKU-Swapper/releases/tag/v0.1.1) includes navigation/layout fixes and rollback, cache integrity, settings and scanning improvements. See the [release notes](docs/releases/v0.1.1.md) for validation and compatibility limits.
+
 ## Layout
 
 ```
@@ -39,7 +43,7 @@ engine/                 pure-Python, stdlib only, no GUI dependency
       a1_bridge.py      ReShade + dlss5-bridge + addon-dlssnr-linux
       a2_optiscaler.py  OptiScaler DLSS-NR via DLL proxy
     __main__.py         CLI
-  tests/                232 tests, stdlib unittest
+  tests/                isolated regression suites, stdlib unittest
 app/                    Flutter UI (Flutter SDK only, no third-party packages)
 tools/env.sh            isolation: project venv + pinned SDK + local pub cache
 tools/install_desktop.py  a menu entry for a checkout, in the user XDG dirs
@@ -56,7 +60,7 @@ nvfku scan              # engine CLI
 flutter build linux        # UI
 ```
 
-Everything lives in one of three places, all outside the repository tree:
+Toolchain caches live either in ignored project directories or user-local directories; engine state is separate:
 
 | What | Where | Why there |
 | --- | --- | --- |
@@ -174,8 +178,7 @@ it occupies.
 
 ## Status
 
-**232 tests, all passing.** Working and verified against the real Steam library on
-the development machine (20 games, 9 runtimes filtered out):
+Automated Python and Flutter regression suites cover isolated filesystem and UI behavior; see the [verification workflow](docs/release-workflow.md) for commands and release gates. The development Steam library was previously inspected (20 games, 9 runtimes filtered out); that is not a cross-distribution or real-game rendering certification.
 
 - Steam discovery across multiple libraries, Proton prefix and tool resolution
   (`CachyOS-10.1000-200` vs `11.0-100` are distinguished, and the launch options
@@ -185,8 +188,8 @@ the development machine (20 games, 9 runtimes filtered out):
   Legacy ships a 0.3 MB launcher stub next to its 429 MB renderer under
   `Phoenix/Binaries/Win64/`; ACC's renderer is under `AC2/Binaries/Win64/`
 - DLSS NR model discovery with digest classification against the measured build
-- **A1 and A2 install for real**, journalled, with rollback verified byte-for-byte
-  in tests (including symlink fidelity and multi-level `mkdir` chains)
+- A1 and A2 perform journalled writes; isolated fixtures verify rollback byte-for-byte
+  (including symlink fidelity and multi-level `mkdir` chains)
 - Component fetching with exponential backoff, pinned sizes, and optional
   verification against the publisher's `SHA256SUMS`
 
@@ -281,26 +284,19 @@ remains manual.
 
 This project's own code is released under the **WTFPL**. See [LICENSE](LICENSE).
 
-**That covers this project's code and nothing else.** One of the files a release
-archive carries is NVIDIA's, and several components are fetched from their own
-releases under their own licences. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+**That covers this project's code and nothing else.** The NVIDIA model is not in standard release packages; users fetch or discover it separately. Other components are fetched from their own releases under their own licences. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 lists them in full; the short version:
 
 | | How it reaches you | Its licence |
 |---|---|---|
 | This project's engine and UI | in the source | WTFPL |
-| `nvngx_dlssnr.dll` (the DLSS NR model) | **in a release archive**, digest-verified | NVIDIA's, proprietary |
+| `nvngx_dlssnr.dll` (the DLSS NR model) | discovered or fetched separately, digest-verified; not in standard releases | NVIDIA's, proprietary |
 | `dlss5-bridge` | fetched from its publisher at install time | MIT |
 | `addon-dlssnr-linux`, `OptiScaler` | fetched from their publishers at install time | GPL-3.0 |
 | ReShade 6.8.0 | fetched from reshade.me at install time | BSD 3-Clause |
 | Flutter runtime | in a release archive | BSD 3-Clause |
 
-**The model is the one thing this project redistributes without a licence to do so.**
-It has no official download: the DLSS SDK ships headers and an import library only,
-and the Linux driver carries no NR model at all. So a release archives it rather than
-leaving every user to find 158 MiB by hand — with the digest recorded in
-`RELEASE.json` and checked by `tools/package.py` before packaging. The full
-reasoning, and the alternatives, are in [docs/weights.md](docs/weights.md).
+**Standard releases exclude the proprietary model.** Its tested digest and community source are documented, but verification does not confer redistribution rights. An optional private tar/AppImage build is separate from the public release workflow. See [model provenance and alternatives](docs/weights.md).
 
 The GPL-3.0 components are **separate programs**, fetched from their own release pages
 and placed beside a game as data. Nothing here links against them, and no GPL source
@@ -321,7 +317,7 @@ python3 tools/package.py           # all three formats into dist/
 | `.deb` | 9.5 MiB | **never** |
 | `.AppImage` | 9.6 MiB | no |
 
-Three formats, and a `SHA256SUMS` beside them.
+Three formats and a checksum manifest. Candidate filenames include a unique build identity; existing artifacts are not silently overwritten. Source revision/dirty fingerprint and measured runtime constraints are recorded in each release manifest. See the [build and verification workflow](docs/release-workflow.md) for the maintained release gate and remaining manual checks.
 
 **None of them contains `nvngx_dlssnr.dll`.** It is 158 MiB, it is NVIDIA's, and
 nothing licenses its redistribution — so a package carrying it would be 119 MiB and
@@ -334,9 +330,7 @@ nvfku model --mirror-sync
 The tool says so at the moment it matters (`RELEASE.json` records it, and the plan
 offers the fetch as an action), rather than failing later with a missing-file error.
 
-`--with-model` bundles it for a private build. It **refuses to combine with
-`--format deb`**, because that is the one combination that causes real trouble: a
-`.deb` carrying a proprietary NVIDIA binary is rejected by every Debian archive.
+`--with-model` is for private tar or AppImage builds only. It **refuses both `--format deb` and `--format all`** before producing any artifact. Direct Debian builder calls enforce the same rule.
 
 The `.deb` is assembled by `tools/package.py` directly — no `dpkg-deb`, which is not
 installable on this machine. A `.deb` is an `ar` archive of `debian-binary`,

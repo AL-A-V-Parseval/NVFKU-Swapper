@@ -7,6 +7,7 @@ exactly.  A rollback bug corrupts someone's game install.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -98,6 +99,28 @@ class JournalTest(unittest.TestCase):
             journal.install_file(self.source / "new.dll", outside)
         self.assertFalse(outside.exists())
 
+    def test_manifest_remains_visible_when_index_is_corrupt(self) -> None:
+        journal = FileJournal(self.paths, self.game, "a1")
+        journal.install_file(self.source / "new.dll", self.game / "new.dll")
+        index = self.paths.backups_root() / "index.json"
+        index.write_text("{broken index")
+        entries = list_journals(self.paths, game_dir=self.game)
+        self.assertEqual([entry["id"] for entry in entries], [journal.journal_id])
+        self.assertFalse(entries[0]["finished"])
+
+    def test_all_manifests_visible_beyond_bounded_index(self) -> None:
+        journal = FileJournal(self.paths, self.game, "a1")
+        journal.note("unfinished installation")
+        manifest = json.loads((journal.dir / "manifest.json").read_text())
+        for number in range(500):
+            entry = dict(manifest, id=f"older-{number:04d}", created_at=number)
+            directory = journal.dir.parent / entry["id"]
+            directory.mkdir()
+            (directory / "manifest.json").write_text(json.dumps(entry))
+        entries = list_journals(self.paths, game_dir=self.game)
+        self.assertEqual(len(entries), 501)
+        self.assertIn(journal.journal_id, {entry["id"] for entry in entries})
+
     def test_rollback_survives_a_reloaded_journal(self) -> None:
         """Rollback must work from disk, not just from in-memory state."""
         journal = FileJournal(self.paths, self.game, "a1")
@@ -117,6 +140,48 @@ class JournalTest(unittest.TestCase):
 
         reloaded = load_journal(self.paths, journal.journal_id)
         self.assertTrue(reloaded.rolled_back)
+
+    def test_missing_preimage_is_retryable_and_never_claimed_complete(self) -> None:
+        original = self.game / "dxgi.dll"
+        original.write_bytes(b"ORIGINAL")
+        journal = FileJournal(self.paths, self.game, "a1")
+        journal.install_file(self.source / "new.dll", original)
+        backup = journal.dir / journal._journal.operations[-1].backup
+        backup.unlink()
+        report = rollback_journal(self.paths, journal.journal_id)
+        self.assertFalse(report.ok)
+        self.assertEqual(original.read_bytes(), b"NEW-CONTENT")
+        self.assertFalse(load_journal(self.paths, journal.journal_id).rolled_back)
+        backup.write_bytes(b"ORIGINAL")
+        retry = rollback_journal(self.paths, journal.journal_id)
+        self.assertTrue(retry.ok)
+        self.assertEqual(original.read_bytes(), b"ORIGINAL")
+
+    def test_symlinked_game_parent_is_refused(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.game / "escape").symlink_to(outside, target_is_directory=True)
+        journal = FileJournal(self.paths, self.game, "a1")
+        with self.assertRaisesRegex(ValueError, "symlinked parent"):
+            journal.install_file(self.source / "new.dll", self.game / "escape" / "new.dll")
+        self.assertFalse((outside / "new.dll").exists())
+
+    def test_external_state_rollback_preserves_independent_edits(self) -> None:
+        state = self.paths.state_root / "profiles" / "sample" / "a1.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("original")
+        journal = FileJournal(self.paths, self.game, "a1", game_key="sample")
+        operation = journal.snapshot_external(state, source_label="route state")
+        state.write_text("installed")
+        journal.seal_external(operation)
+        state.write_text("user edit")
+        report = rollback_journal(self.paths, journal.journal_id)
+        self.assertFalse(report.ok)
+        self.assertEqual(state.read_text(), "user edit")
+        self.assertFalse(load_journal(self.paths, journal.journal_id).rolled_back)
+        state.write_text("installed")
+        self.assertTrue(rollback_journal(self.paths, journal.journal_id).ok)
+        self.assertEqual(state.read_text(), "original")
 
     def test_mkdir_is_undone_only_when_empty(self) -> None:
         journal = FileJournal(self.paths, self.game, "a1")

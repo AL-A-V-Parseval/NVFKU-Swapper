@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import fcntl
 import hashlib
 import io
 import os
@@ -41,6 +42,8 @@ import sys
 import tarfile
 import tempfile
 import time
+import uuid
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +60,15 @@ MAINTAINER = "AL-A-V-Parseval <jackyji070122@gmail.com>"
 #: The GTK stack the Flutter bundle links but does not ship. Named for Debian, since
 #: that is what the `.deb` control file needs; an AppImage takes them from the host
 #: and the tarball's launcher does too.
-DEB_DEPENDS = "python3, libgtk-3-0, libblkid1, libepoxy0, libglib2.0-0"
+DEB_DEPENDS = "libgtk-3-0, libblkid1, libepoxy0, libglib2.0-0, libgcc-s1"
+_BUILD_ID = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+
+
+def artifact_path(out_dir: Path, name: str) -> Path:
+    target = out_dir / name
+    if target.exists() or target.is_symlink():
+        raise SystemExit(f"refusing to overwrite existing artifact: {target}")
+    return target
 
 sys.path.insert(0, str(ENGINE))
 
@@ -241,9 +252,9 @@ def write_launchers(staging: Path) -> None:
 
 
 def build_tar(out_dir: Path, *, with_model: bool) -> Path:
-    stamp = time.strftime("%Y%m%d")
+    stamp = _BUILD_ID
     name = f"{PACKAGE}-{version()}-{stamp}"
-    archive = out_dir / f"{name}.tar.gz"
+    archive = artifact_path(out_dir, f"{name}.tar.gz")
     with tempfile.TemporaryDirectory(prefix="nvfku-tar-") as raw:
         staging = Path(raw) / PACKAGE
         payload_tree(staging, with_model=with_model)
@@ -305,8 +316,10 @@ def _tar_gz(root: Path) -> bytes:
 
 
 def build_deb(out_dir: Path, *, with_model: bool) -> Path:
-    stamp = time.strftime("%Y%m%d")
-    archive = out_dir / f"{PACKAGE}_{version()}_{stamp}_amd64.deb"
+    if with_model:
+        raise SystemExit("Debian packages must not contain the proprietary model")
+    stamp = _BUILD_ID
+    archive = artifact_path(out_dir, f"{PACKAGE}_{version()}_{stamp}_amd64.deb")
     with tempfile.TemporaryDirectory(prefix="nvfku-deb-") as raw:
         # The payload root IS the install prefix. `payload_tree` lays out `app/`,
         # `engine/` and the launchers relative to wherever it is pointed, so
@@ -317,96 +330,6 @@ def build_deb(out_dir: Path, *, with_model: bool) -> Path:
         payload_tree(staging, with_model=with_model)
         write_launchers(staging)
 
-        # Under /usr/lib, and two launchers in /usr/bin that point at it. The
-        # launcher in the payload is for the tarball and AppImage, where the tree
-        # moves; here the prefix is fixed, so these are absolute on purpose.
-        launcher = "/usr/lib/nvfku/nvfku"
-        # Every directory comes from the `rglob` walk below, which marks them as
-        # directories. Writing them by hand as zero-length entries named "./usr/"
-        # made tar record them as *files* of that name, and extraction then failed
-        # with "Not a directory".
-        data_entries: dict[str, tuple[bytes, int]] = {}
-        # Relative to the *archive* root, not the payload root: `relative_to(staging)`
-        # would drop the `usr/lib/nvfku` prefix and unpack the payload into `/`.
-        data_root = staging.parents[2]
-        for path in staging.rglob("*"):
-            rel = path.relative_to(data_root).as_posix()
-            if path.is_dir():
-                data_entries[f"./{rel}/"] = (b"", 0o755)
-            elif path.is_file():
-                mode = 0o755 if os.access(path, os.X_OK) else 0o644
-                data_entries[f"./{rel}"] = (path.read_bytes(), mode)
-
-        data_entries["./usr/lib/nvfku/RELEASE.json"] = (
-            _release_json(with_model, "deb").encode(),
-            0o644,
-        )
-        # The two entry points a Debian user expects on $PATH.
-        data_entries["./usr/bin/nvfku-swapper"] = (
-            f"#!/bin/sh\nexec {launcher} \"$@\"\n".encode(),
-            0o755,
-        )
-        data_entries["./usr/bin/nvfku"] = (
-            "#!/bin/sh\n"
-            "PYTHONPATH=/usr/lib/nvfku/engine exec python3 -m nvfku \"$@\"\n".encode(),
-            0o755,
-        )
-        data_entries["./usr/share/applications/nvfku-swapper.desktop"] = (
-            _DESKTOP.format(
-                summary=SUMMARY,
-                exec="nvfku-swapper",
-                icon="nvfku-swapper",
-            ).encode(),
-            0o644,
-        )
-        with tempfile.TemporaryDirectory() as icon_tmp:
-            icon = write_icon(Path(icon_tmp) / "nvfku-swapper.png", 256)
-            data_entries[
-                "./usr/share/icons/hicolor/256x256/apps/nvfku-swapper.png"
-            ] = (icon.read_bytes(), 0o644)
-        for doc in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "README.zh.md"):
-            source = staging / doc
-            if source.is_file():
-                data_entries[f"./usr/share/doc/nvfku-swapper/{doc}"] = (
-                    source.read_bytes(),
-                    0o644,
-                )
-
-        installed_kb = sum(len(c) for c, _ in data_entries.values()) // 1024
-        control = (
-            f"Package: {PACKAGE}\n"
-            f"Version: {version()}\n"
-            "Section: utils\n"
-            "Priority: optional\n"
-            f"Architecture: amd64\n"
-            f"Depends: {DEB_DEPENDS}\n"
-            f"Installed-Size: {installed_kb}\n"
-            f"Maintainer: {MAINTAINER}\n"
-            f"Homepage: {HOMEPAGE}\n"
-            f"Description: {SUMMARY}\n"
-            " Two routes for loading a DLSS Neural Rendering proxy into a Proton game:\n"
-            " a ReShade overlay route with live controls, and a single-DLL OptiScaler\n"
-            " route with no prerequisite. Every change is journalled, so an install can\n"
-            " be undone exactly.\n"
-            " .\n"
-            " The DLSS NR model is not bundled. It is 158 MiB, proprietary, and has no\n"
-            " licence permitting redistribution, so Debian policy would refuse it. Run\n"
-            " 'nvfku model --mirror-sync' once to fetch and verify it.\n"
-        ).encode()
-
-        print("  assembling control and data members")
-        control_dir = Path(raw) / "control"
-        control_dir.mkdir()
-        (control_dir / "control").write_bytes(control)
-        (control_dir / "changelog").write_bytes(
-            (
-                f"{PACKAGE} ({version()}) unstable; urgency=medium\n\n"
-                f"  * Initial packaging.\n\n"
-                f" -- {MAINTAINER}  {time.strftime('%a, %d %b %Y')} 00:00:00 +0000\n"
-            ).encode()
-        )
-        shutil.copy2(staging / "THIRD_PARTY_NOTICES.md", control_dir / "copyright")
-        control_tar = _tar_gz(control_dir)
         # The two entry points a Debian user expects on $PATH, the desktop entry,
         # the icon, and the docs. These live outside the payload prefix, so they are
         # written here rather than by `payload_tree`.
@@ -449,9 +372,44 @@ def build_deb(out_dir: Path, *, with_model: bool) -> Path:
             _release_json(with_model, "deb"), encoding="utf-8"
         )
 
+        installed_kb = (sum(p.stat().st_size for p in data_root.rglob("*") if p.is_file()) + 1023) // 1024
+        control = (
+            f"Package: {PACKAGE}\n"
+            f"Version: {version()}\n"
+            "Section: utils\n"
+            "Priority: optional\n"
+            f"Architecture: amd64\n"
+            f"Depends: {deb_dependencies(runtime_requirements())}\n"
+            f"Installed-Size: {installed_kb}\n"
+            f"Maintainer: {MAINTAINER}\n"
+            f"Homepage: {HOMEPAGE}\n"
+            f"Description: {SUMMARY}\n"
+            " Two routes for loading a DLSS Neural Rendering proxy into a Proton game:\n"
+            " a ReShade overlay route with live controls, and a single-DLL OptiScaler\n"
+            " route with no prerequisite. Every change is journalled, so an install can\n"
+            " be undone exactly.\n"
+            " .\n"
+            " The DLSS NR model is not bundled. It is 158 MiB, proprietary, and has no\n"
+            " licence permitting redistribution, so Debian policy would refuse it. Run\n"
+            " 'nvfku model --mirror-sync' once to fetch and verify it.\n"
+        ).encode()
+
+        print("  assembling control and data members")
+        control_dir = Path(raw) / "control"
+        control_dir.mkdir()
+        (control_dir / "control").write_bytes(control)
+        (control_dir / "changelog").write_bytes(
+            (
+                f"{PACKAGE} ({version()}) unstable; urgency=medium\n\n"
+                f"  * Initial packaging.\n\n"
+                f" -- {MAINTAINER}  {time.strftime('%a, %d %b %Y')} 00:00:00 +0000\n"
+            ).encode()
+        )
+        shutil.copy2(staging / "THIRD_PARTY_NOTICES.md", control_dir / "copyright")
+        control_tar = _tar_gz(control_dir)
         data_tar = _tar_gz(data_root)
 
-        with archive.open("wb") as handle:
+        with archive.open("xb") as handle:
             handle.write(b"!<arch>\n")
             handle.write(_ar_member("debian-binary", b"2.0\n"))
             handle.write(_ar_member("control.tar.gz", control_tar))
@@ -478,8 +436,8 @@ def build_appimage(out_dir: Path, *, with_model: bool) -> Path:
             f"appimagetool not found at {tool}\n"
             "  fetch it from https://github.com/AppImage/appimagetool/releases"
         )
-    stamp = time.strftime("%Y%m%d")
-    archive = out_dir / f"{PACKAGE}-{version()}-{stamp}-x86_64.AppImage"
+    stamp = _BUILD_ID
+    archive = artifact_path(out_dir, f"{PACKAGE}-{version()}-{stamp}-x86_64.AppImage")
 
     with tempfile.TemporaryDirectory(prefix="nvfku-appdir-") as raw:
         appdir = Path(raw) / f"{PACKAGE}.AppDir"
@@ -522,6 +480,89 @@ def build_appimage(out_dir: Path, *, with_model: bool) -> Path:
 # --------------------------------------------------------------------- shared
 
 
+def runtime_requirements() -> dict:
+    """Measure required ELF symbol versions, retaining the declared glibc floor."""
+    requirements = {"python_min": "3.9", "architecture": "x86_64",
+                    "glibc_min": "2.34", "glibcxx_min": None, "cxxabi_min": None}
+    candidates = [APP_BUNDLE / "nvfku_ui", *sorted((APP_BUNDLE / "lib").glob("*.so"))]
+    for binary in candidates:
+        if not binary.is_file():
+            continue
+        with binary.open("rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+        try:
+            result = subprocess.run(["readelf", "--version-info", str(binary)],
+                capture_output=True, text=True, check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise SystemExit(f"cannot determine ELF runtime requirements for {binary}: {exc}") from exc
+        for symbol, key in (("GLIBC", "glibc_min"), ("GLIBCXX", "glibcxx_min"), ("CXXABI", "cxxabi_min")):
+            tags = re.findall(r"\b" + symbol + r"_([0-9.]+)\b", result.stdout)
+            for tag in tags:
+                current = requirements[key]
+                if current is None or tuple(map(int, tag.split("."))) > tuple(map(int, current.split("."))):
+                    requirements[key] = tag
+    return requirements
+
+
+def deb_dependencies(runtime: dict) -> str:
+    # GNU's ABI history: https://gcc.gnu.org/onlinedocs/libstdc++/manual/abi.html
+    # Conservative for old symbols; explicit mappings for newer toolchains.
+    releases = ["4.1.1"] * 9 + ["4.2.0", "4.3.0", "4.4.0", "4.4.1", "4.4.2",
+        "4.5.0", "4.6.0", "4.6.1", "4.7.0", "4.8.0", "4.8.3", "4.9.0",
+        "5.1.0", "6.1.0", "7.1.0", "7.2.0", "8.1.0", "9.1.0", "9.2.0",
+        "9.3.0", "11.1.0", "12.1.0", "13.1.0", "13.2.0", "14.1.0", "15.1.0"]
+    cxx_release = "4.1.1"
+    tag = runtime["glibcxx_min"]
+    if tag:
+        parts = tuple(map(int, tag.split(".")))
+        if parts == (3, 4):
+            index = 0
+        elif len(parts) == 3 and parts[:2] == (3, 4) and parts[2] < len(releases):
+            index = parts[2]
+        else:
+            raise SystemExit(f"unknown GLIBCXX requirement: {tag}; update the ABI mapping before packaging")
+        cxx_release = releases[index]
+    abi = runtime["cxxabi_min"]
+    if abi:
+        minimums = {"1.3": "4.1.1", "1.3.1": "4.1.1", "1.3.2": "4.3.0",
+            "1.3.3": "4.4.0", "1.3.4": "4.5.0", "1.3.5": "4.6.0", "1.3.6": "4.7.0",
+            "1.3.7": "4.8.0", "1.3.8": "4.9.0", "1.3.9": "5.1.0", "1.3.10": "6.1.0",
+            "1.3.11": "7.1.0", "1.3.12": "9.1.0", "1.3.13": "11.1.0",
+            "1.3.14": "13.1.0", "1.3.15": "14.1.0", "1.3.16": "15.1.0", "1.3.17": "16.1.0"}
+        if abi not in minimums:
+            raise SystemExit(f"unknown CXXABI requirement: {abi}")
+        cxx_release = max((cxx_release, minimums[abi]), key=lambda s: tuple(map(int, s.split("."))))
+    return (f"python3 (>= 3.9), libc6 (>= {runtime['glibc_min']}), "
+            f"libstdc++6 (>= {cxx_release}), {DEB_DEPENDS}")
+
+
+def source_provenance() -> dict:
+    """Identify the actual worktree, including uncommitted and untracked source."""
+    try:
+        revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+            capture_output=True, text=True, check=True).stdout.strip()
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=ROOT, capture_output=True, check=True).stdout
+        listing = subprocess.run(["git", "ls-files", "-z", "--cached", "--others",
+            "--exclude-standard"], cwd=ROOT, capture_output=True, check=True).stdout
+        digest = hashlib.sha256()
+        for name in sorted(set(listing.split(b"\0")) - {b""}):
+            path = ROOT / os.fsdecode(name)
+            digest.update(name + b"\0")
+            if path.is_symlink():
+                digest.update(b"symlink:" + os.fsencode(os.readlink(path)))
+            elif path.is_file():
+                digest.update(sha256_of(path).encode())
+            else:
+                digest.update(b"absent")
+            digest.update(b"\0")
+        return {"revision": revision, "dirty": bool(status), "tree_sha256": digest.hexdigest()}
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return {"revision": None, "dirty": None, "tree_sha256": None,
+                "unavailable": str(exc)}
+
+
 def _release_json(with_model: bool, kind: str) -> str:
     import json
 
@@ -531,6 +572,9 @@ def _release_json(with_model: bool, kind: str) -> str:
                 "name": "NVFKU-Swapper",
                 "version": version(),
                 "format": kind,
+                "build_id": _BUILD_ID,
+                "source_provenance": source_provenance(),
+                "runtime": runtime_requirements(),
                 "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "licence": "WTFPL (this project's code only)",
                 "model_bundled": with_model,
@@ -586,7 +630,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.with_model and args.format == "deb":
+    wanted = ["tar", "deb", "appimage"] if args.format == "all" else [args.format]
+    if args.with_model and "deb" in wanted:
         raise SystemExit(
             "--with-model and --format deb are refused together.\n"
             "  nvngx_dlssnr.dll is NVIDIA's, proprietary, and has no licence that\n"
@@ -603,7 +648,30 @@ def main() -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    wanted = ["tar", "deb", "appimage"] if args.format == "all" else [args.format]
+    # Keep one inode for cooperating builders while merging the checksum set.
+    with (out_dir / ".package.lock").open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return _build_candidates(args, wanted, out_dir)
+
+
+def _build_candidates(args, wanted, out_dir):
+    sums = out_dir / "SHA256SUMS"
+    entries = {}
+    if sums.is_file():
+        for line in sums.read_text(encoding="utf-8").splitlines():
+            parts = line.split("  ", 1)
+            if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+                raise SystemExit("invalid SHA256SUMS entry; refusing to replace the manifest")
+            digest, name = parts
+            if name in entries:
+                raise SystemExit(f"duplicate checksum filename: {name}")
+            if Path(name).name != name or name in {".", ".."}:
+                raise SystemExit(f"unsafe checksum filename: {name}")
+            previous = out_dir / name
+            if previous.is_file():
+                if sha256_of(previous) != digest:
+                    raise SystemExit(f"existing artifact no longer matches SHA256SUMS: {name}")
+                entries[name] = digest
 
     built: list[Path] = []
     for kind in wanted:
@@ -623,11 +691,10 @@ def main() -> int:
     print()
     # A checksum file alongside the artifacts. Anyone downloading a release binary
     # should be able to verify it, and the sums are already computed for the report.
-    sums = out_dir / "SHA256SUMS"
-    sums.write_text(
-        "\n".join(f"{sha256_of(p)}  {p.name}" for p in built) + "\n",
-        encoding="utf-8",
-    )
+    for artifact in built:
+        entries[artifact.name] = sha256_of(artifact)
+    from nvfku.paths import atomic_write_text
+    atomic_write_text(sums, "\n".join(f"{digest}  {name}" for name, digest in entries.items()) + "\n")
     print()
     print(f"wrote {sums.name}")
     print(sums.read_text(), end="")

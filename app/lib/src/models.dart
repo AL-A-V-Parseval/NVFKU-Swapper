@@ -33,11 +33,11 @@ class EngineCheck {
   bool get isBlocker => severity == 'blocker';
 
   factory EngineCheck.fromJson(Map<String, dynamic> json) => EngineCheck(
-        name: json['name'] as String? ?? '',
-        severity: json['severity'] as String? ?? 'warning',
-        detail: json['detail'] as String? ?? '',
-        fix: json['fix'] as String?,
-      );
+    name: json['name'] as String? ?? '',
+    severity: json['severity'] as String? ?? 'warning',
+    detail: json['detail'] as String? ?? '',
+    fix: json['fix'] as String?,
+  );
 }
 
 /// One filesystem change the route would make.
@@ -57,12 +57,12 @@ class EngineAction {
   final bool optional;
 
   factory EngineAction.fromJson(Map<String, dynamic> json) => EngineAction(
-        kind: json['kind'] as String? ?? 'note',
-        destination: json['destination'] as String? ?? '',
-        source: json['source'] as String?,
-        reason: json['reason'] as String? ?? '',
-        optional: json['optional'] as bool? ?? false,
-      );
+    kind: json['kind'] as String? ?? 'note',
+    destination: json['destination'] as String? ?? '',
+    source: json['source'] as String?,
+    reason: json['reason'] as String? ?? '',
+    optional: json['optional'] as bool? ?? false,
+  );
 }
 
 /// A file the route needs but may not redistribute.
@@ -80,11 +80,11 @@ class EngineMissing {
   final bool blocking;
 
   factory EngineMissing.fromJson(Map<String, dynamic> json) => EngineMissing(
-        what: json['what'] as String? ?? '',
-        why: json['why'] as String? ?? '',
-        howToGet: json['how_to_get'] as String? ?? '',
-        blocking: json['blocking'] as bool? ?? true,
-      );
+    what: json['what'] as String? ?? '',
+    why: json['why'] as String? ?? '',
+    howToGet: json['how_to_get'] as String? ?? '',
+    blocking: json['blocking'] as bool? ?? true,
+  );
 }
 
 /// A dry-run plan for one route against one game.
@@ -141,31 +141,33 @@ class RoutePlan {
   Iterable<EngineCheck> get warnings => checks.where((c) => c.isWarning);
 
   factory RoutePlan.fromJson(Map<String, dynamic> json) => RoutePlan(
-        route: json['route'] as String? ?? '',
-        title: json['title'] as String? ?? '',
-        gameName: json['game'] as String? ?? '',
-        gameDir: json['game_dir'] as String? ?? '',
-        summary: json['summary'] as String? ?? '',
-        viable: json['viable'] as bool? ?? false,
-        readOnly: json['read_only'] as bool? ?? false,
-        checks: (json['checks'] as List<dynamic>? ?? [])
-            .map((e) => EngineCheck.fromJson(e as Map<String, dynamic>))
-            .toList(growable: false),
-        actions: (json['actions'] as List<dynamic>? ?? [])
-            .map((e) => EngineAction.fromJson(e as Map<String, dynamic>))
-            .toList(growable: false),
-        missing: (json['missing'] as List<dynamic>? ?? [])
-            .map((e) => EngineMissing.fromJson(e as Map<String, dynamic>))
-            .toList(growable: false),
-        manualSteps:
-            (json['manual_steps'] as List<dynamic>? ?? []).cast<String>(),
-        detail: json['detail'] as String? ?? '',
-        launchOptions: json['launch_options'] as String?,
-        steamRunning: json['steam_running'] as bool? ?? false,
-        prerequisite: json['prerequisite'] == null
+    route: json['route'] as String? ?? '',
+    title: json['title'] as String? ?? '',
+    gameName: json['game'] as String? ?? '',
+    gameDir: json['game_dir'] as String? ?? '',
+    summary: json['summary'] as String? ?? '',
+    viable: json['viable'] as bool? ?? false,
+    readOnly: json['read_only'] as bool? ?? false,
+    checks: (json['checks'] as List<dynamic>? ?? [])
+        .map((e) => EngineCheck.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    actions: (json['actions'] as List<dynamic>? ?? [])
+        .map((e) => EngineAction.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    missing: (json['missing'] as List<dynamic>? ?? [])
+        .map((e) => EngineMissing.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    manualSteps: (json['manual_steps'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+    detail: json['detail'] as String? ?? '',
+    launchOptions: json['launch_options'] as String?,
+    steamRunning: json['steam_running'] as bool? ?? false,
+    prerequisite:
+        json['prerequisite'] == null
             ? null
             : RoutePlan.fromJson(json['prerequisite'] as Map<String, dynamic>),
-      );
+  );
 }
 
 /// The final component of a path: the file name.
@@ -209,6 +211,8 @@ class Game {
     this.dlssnrModels = const [],
     this.reshadeFiles = const [],
     this.source = 'steam',
+    this.detectionComplete = true,
+    this.detectionWarnings = const [],
   });
 
   final String appid;
@@ -223,6 +227,8 @@ class Game {
   final List<String> nativeDlss;
   final List<String> dlssnrModels;
   final List<String> reshadeFiles;
+  final bool detectionComplete;
+  final List<String> detectionWarnings;
 
   /// ``steam`` for a Steam appid, ``folder`` for a hand-added directory.
   final String source;
@@ -273,8 +279,10 @@ class Game {
   String get exeName {
     final exe = launchExe;
     if (exe == null || exe.isEmpty) return name;
-    final cut = [exe.lastIndexOf('/'), exe.lastIndexOf('\\')]
-        .reduce((a, b) => a > b ? a : b);
+    final cut = [
+      exe.lastIndexOf('/'),
+      exe.lastIndexOf('\\'),
+    ].reduce((a, b) => a > b ? a : b);
     return cut == -1 ? exe : exe.substring(cut + 1);
   }
 
@@ -285,25 +293,40 @@ class Game {
   /// authority — and the two can differ for one frame while a language change is
   /// being applied.
   String nrModelLabel(Locale locale) {
+    if (dlssnrModels.isEmpty && !detectionComplete) {
+      return translate(locale, 'games.nrUnknown');
+    }
     if (dlssnrModels.isEmpty) return translate(locale, 'games.nrNone');
     return translate(locale, 'games.nrPresent', {'n': dlssnrModels.length});
   }
 
   factory Game.fromJson(Map<String, dynamic> json) => Game(
-        appid: json['appid'] as String? ?? '',
-        name: json['name'] as String? ?? '',
-        installDir: json['install_dir'] as String? ?? '',
-        protonPrefix: json['proton_prefix'] as String?,
-        protonTool: json['proton_tool'] as String?,
-        launchExe: json['launch_exe'] as String?,
-        bitness: json['bitness'] as int?,
-        renderingApi: json['rendering_api'] as String?,
-        apiEvidence: (json['api_evidence'] as List<dynamic>? ?? []).cast<String>(),
-        nativeDlss: (json['native_dlss'] as List<dynamic>? ?? []).cast<String>(),
-        dlssnrModels: (json['nvngx_dlssnr'] as List<dynamic>? ?? []).cast<String>(),
-        reshadeFiles: (json['reshade_files'] as List<dynamic>? ?? []).cast<String>(),
-        source: json['source'] as String? ?? 'steam',
-      );
+    appid: json['appid'] as String? ?? '',
+    name: json['name'] as String? ?? '',
+    installDir: json['install_dir'] as String? ?? '',
+    protonPrefix: json['proton_prefix'] as String?,
+    protonTool: json['proton_tool'] as String?,
+    launchExe: json['launch_exe'] as String?,
+    bitness: json['bitness'] as int?,
+    renderingApi: json['rendering_api'] as String?,
+    apiEvidence: (json['api_evidence'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+    nativeDlss: (json['native_dlss'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+    dlssnrModels: (json['nvngx_dlssnr'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+    reshadeFiles: (json['reshade_files'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+    source: json['source'] as String? ?? 'steam',
+    detectionComplete: json['detection_complete'] as bool? ?? true,
+    detectionWarnings: (json['detection_warnings'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+  );
 }
 
 /// The outcome of an install, including what is still manual.
@@ -337,18 +360,25 @@ class InstallResult {
   final String? refusal;
 
   factory InstallResult.fromJson(Map<String, dynamic> json) => InstallResult(
-        route: json['route'] as String? ?? '',
-        game: json['game'] as String? ?? '',
-        gameDir: json['game_dir'] as String? ?? '',
-        journalId: json['journal_id'] as String?,
-        notes: (json['notes'] as List<dynamic>? ?? []).cast<String>(),
-        warnings: (json['warnings'] as List<dynamic>? ?? []).cast<String>(),
-        verified: (json['verified'] as List<dynamic>? ?? []).cast<String>(),
-        manualSteps:
-            (json['manual_steps'] as List<dynamic>? ?? []).cast<String>(),
-        launchOptions: json['launch_options'] as String?,
-        refusal: json['refused'] as String?,
-      );
+    route: json['route'] as String? ?? '',
+    game: json['game'] as String? ?? '',
+    gameDir: json['game_dir'] as String? ?? '',
+    journalId: json['journal_id'] as String?,
+    notes: (json['notes'] as List<dynamic>? ?? []).cast<String>().toList(
+      growable: false,
+    ),
+    warnings: (json['warnings'] as List<dynamic>? ?? []).cast<String>().toList(
+      growable: false,
+    ),
+    verified: (json['verified'] as List<dynamic>? ?? []).cast<String>().toList(
+      growable: false,
+    ),
+    manualSteps: (json['manual_steps'] as List<dynamic>? ?? [])
+        .cast<String>()
+        .toList(growable: false),
+    launchOptions: json['launch_options'] as String?,
+    refusal: json['refused'] as String?,
+  );
 }
 
 /// One line of live progress from a running install.
@@ -387,14 +417,14 @@ class ProviderRow {
   final String? error;
 
   factory ProviderRow.fromJson(Map<String, dynamic> json) => ProviderRow(
-        key: json['key'] as String? ?? '',
-        version: json['version'] as String? ?? '?',
-        pinned: json['pinned'] as bool? ?? false,
-        size: json['size'] as int?,
-        sha256: json['sha256'] as String?,
-        url: json['url'] as String?,
-        error: json['error'] as String?,
-      );
+    key: json['key'] as String? ?? '',
+    version: json['version'] as String? ?? '?',
+    pinned: json['pinned'] as bool? ?? false,
+    size: json['size'] as int?,
+    sha256: json['sha256'] as String?,
+    url: json['url'] as String?,
+    error: json['error'] as String?,
+  );
 }
 
 /// A journal entry, used by the rollback list.
@@ -406,6 +436,7 @@ class JournalEntry {
     required this.operations,
     required this.finished,
     required this.rolledBack,
+    this.rollbackStarted = false,
     this.createdAt,
   });
 
@@ -415,6 +446,11 @@ class JournalEntry {
   final int operations;
   final bool finished;
   final bool rolledBack;
+  final bool rollbackStarted;
+
+  /// Interrupted installs and restores need recovery, not a live-state badge.
+  bool get live => finished && !rolledBack && !rollbackStarted;
+  bool get restorable => !rolledBack;
 
   /// When the journal was started, in unix seconds. Absent for a journal written
   /// before this field existed, which is why the log renders a placeholder rather
@@ -422,16 +458,16 @@ class JournalEntry {
   final double? createdAt;
 
   factory JournalEntry.fromJson(Map<String, dynamic> json) => JournalEntry(
-        id: json['id'] as String? ?? '',
-        route: json['route'] as String? ?? '',
-        gameDir: json['game_dir'] as String? ?? '',
-        operations: json['operations'] as int? ?? 0,
-        finished: json['finished'] as bool? ?? false,
-        rolledBack: json['rolled_back'] as bool? ?? false,
-        createdAt: (json['created_at'] as num?)?.toDouble(),
-      );
+    id: json['id'] as String? ?? '',
+    route: json['route'] as String? ?? '',
+    gameDir: json['game_dir'] as String? ?? '',
+    operations: json['operations'] as int? ?? 0,
+    finished: json['finished'] as bool? ?? false,
+    rolledBack: json['rolled_back'] as bool? ?? false,
+    rollbackStarted: json['rollback_started'] as bool? ?? false,
+    createdAt: (json['created_at'] as num?)?.toDouble(),
+  );
 }
-
 
 /// A game's Steam launch options as the engine sees them.
 class LaunchOptionsState {
@@ -456,7 +492,8 @@ class LaunchOptionsState {
   bool get hasValue => launchOptions != null && launchOptions!.isNotEmpty;
   bool get canWrite => !steamRunning;
 
-  factory LaunchOptionsState.fromJson(Map<String, dynamic> json) => LaunchOptionsState(
+  factory LaunchOptionsState.fromJson(Map<String, dynamic> json) =>
+      LaunchOptionsState(
         appid: json['appid'] as String? ?? '',
         game: json['game'] as String? ?? '',
         config: json['config'] as String? ?? '',
@@ -485,13 +522,16 @@ class LaunchOptionsWrite {
   final String? previous;
   final List<String> notes;
 
-  factory LaunchOptionsWrite.fromJson(Map<String, dynamic> json) => LaunchOptionsWrite(
+  factory LaunchOptionsWrite.fromJson(Map<String, dynamic> json) =>
+      LaunchOptionsWrite(
         value: json['value'] as String? ?? '',
         config: json['config'] as String? ?? '',
         backup: json['backup'] as String? ?? '',
         createdKey: json['created_key'] as bool? ?? false,
         verified: json['verified'] as bool? ?? false,
         previous: json['previous'] as String?,
-        notes: (json['notes'] as List<dynamic>? ?? []).cast<String>(),
+        notes: (json['notes'] as List<dynamic>? ?? []).cast<String>().toList(
+          growable: false,
+        ),
       );
 }

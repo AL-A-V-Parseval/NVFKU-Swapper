@@ -6,6 +6,8 @@
 /// byte for byte, which the test suite asserts rather than assumes.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'design.dart';
@@ -15,10 +17,9 @@ import 'models.dart';
 import 'widgets.dart';
 
 class HistoryView extends StatefulWidget {
-  const HistoryView({super.key, required this.engine, required this.onChanged});
+  const HistoryView({super.key, required this.engine});
 
   final Engine engine;
-  final Future<void> Function() onChanged;
 
   @override
   State<HistoryView> createState() => _HistoryViewState();
@@ -27,23 +28,47 @@ class HistoryView extends StatefulWidget {
 class _HistoryViewState extends State<HistoryView> {
   List<JournalEntry>? _entries;
   String? _error;
+  String? _rollbackError;
   String? _busyId;
   String? _report;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    widget.engine.revision.addListener(_stateChanged);
     _load();
   }
 
+  void _stateChanged() => unawaited(_load());
+
+  @override
+  void didUpdateWidget(HistoryView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.engine, widget.engine)) {
+      oldWidget.engine.revision.removeListener(_stateChanged);
+      widget.engine.revision.addListener(_stateChanged);
+      unawaited(_load());
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.engine.revision.removeListener(_stateChanged);
+    super.dispose();
+  }
+
   Future<void> _load() async {
-    setState(() => _error = null);
+    final request = ++_loadGeneration;
     try {
       final entries = await widget.engine.backups();
-      if (!mounted) return;
-      setState(() => _entries = entries);
+      if (!mounted || request != _loadGeneration) return;
+      setState(() {
+        _entries = entries;
+        _error = null;
+      });
     } on EngineException catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != _loadGeneration) return;
       setState(() => _error = e.message);
     }
   }
@@ -52,6 +77,7 @@ class _HistoryViewState extends State<HistoryView> {
     setState(() {
       _busyId = entry.id;
       _report = null;
+      _rollbackError = null;
     });
     try {
       final report = await widget.engine.rollback(entry.id);
@@ -60,13 +86,12 @@ class _HistoryViewState extends State<HistoryView> {
         _busyId = null;
         _report = report;
       });
-      await _load();
-      await widget.onChanged();
+      // Engine.revision refreshes this view and the Shell after rollback.
     } on EngineException catch (e) {
       if (!mounted) return;
       setState(() {
         _busyId = null;
-        _error = e.message;
+        _rollbackError = e.message;
       });
     }
   }
@@ -94,6 +119,13 @@ class _HistoryViewState extends State<HistoryView> {
                 ),
               ),
 
+              if (_rollbackError != null)
+                Notice(
+                  title: context.t('history.rollbackFailedTitle'),
+                  mono: _rollbackError,
+                  tone: AppColors.danger(context),
+                  icon: Icons.error_outline,
+                ),
               if (_error != null)
                 Notice(
                   title: context.t('history.readError'),
@@ -161,7 +193,7 @@ class _JournalCard extends StatelessWidget {
     final theme = Theme.of(context);
     final stateKey = entry.rolledBack
         ? 'history.rolledBack'
-        : entry.finished
+        : entry.live
             ? 'history.complete'
             : 'history.incomplete';
 
@@ -183,7 +215,7 @@ class _JournalCard extends StatelessWidget {
                 label: context.t(stateKey),
                 tone: entry.rolledBack
                     ? theme.colorScheme.onSurfaceVariant
-                    : AppColors.success(context),
+                    : entry.live ? AppColors.success(context) : AppColors.warning(context),
               ),
               const SizedBox(width: AppSpace.sm),
               Text(

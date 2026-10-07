@@ -19,6 +19,7 @@ from unittest import mock
 
 from nvfku import steamconfig
 from nvfku.paths import Paths
+from nvfku.plan import InstallRefused
 from nvfku.route import a1_bridge
 
 from engine.tests.test_install import InstallTestBase
@@ -130,33 +131,24 @@ class SteamStateTest(unittest.TestCase):
 
 
 class MissingConfigTest(InstallTestBase):
-    """No config file is not the same as Steam running.
+    """A1 must not install a nonfunctional bridge without Steam launch options."""
 
-    With no `localconfig.vdf` there is nothing to write and nothing that would
-    revert it, so the file install proceeds and the reason is reported. Refusing
-    here would block a machine where Steam has never been started.
-    """
-
-    def test_the_install_proceeds_and_warns(self) -> None:
+    def test_missing_config_refuses_before_modifying_game(self) -> None:
         game = self.sandbox.game()
         self.sandbox.stub_model()
         # This case is about *no config at all*, which the sandbox otherwise has.
         for leftover in (self.sandbox.steam / "userdata").rglob("localconfig.vdf"):
             leftover.unlink()
-        result = a1_bridge.install(
-            self.sandbox.paths,
-            game,
-            verify_against_upstream=False,
-            skip_download=True,
-            logger=lambda *_: None,
-            proc_root=self.EMPTY_PROC,
-        )
-        self.assertIsNotNone(result.journal_id)
-        # The components landed.
-        self.assertTrue((self.sandbox.exe_dir / a1_bridge.ADDON_DLL).is_file())
-        # And the missing config is stated rather than silently skipped.
-        joined = " ".join(result.warnings)
-        self.assertIn("launch options", joined)
+        with self.assertRaisesRegex(InstallRefused, "launch options"):
+            a1_bridge.install(
+                self.sandbox.paths,
+                game,
+                verify_against_upstream=False,
+                skip_download=True,
+                logger=lambda *_: None,
+                proc_root=self.EMPTY_PROC,
+            )
+        self.assertFalse((self.sandbox.exe_dir / a1_bridge.ADDON_DLL).exists())
 
 
 if __name__ == "__main__":

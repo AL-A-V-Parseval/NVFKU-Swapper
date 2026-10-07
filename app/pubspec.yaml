@@ -1,7 +1,7 @@
 name: nvfku_ui
 description: A Linux-native installer for community DLSS 5 routes, driven by the nvfku engine.
 publish_to: none
-version: 0.1.0
+version: 0.1.1
 
 # Deliberately dependency-free beyond the SDK.  The engine is a Python process
 # the UI drives over JSON, so there is no FFI, no code generation, and nothing

@@ -20,7 +20,11 @@ import 'l10n.dart';
 import 'widgets.dart';
 
 class SettingsView extends StatefulWidget {
-  const SettingsView({super.key, required this.engine, required this.onChanged});
+  const SettingsView({
+    super.key,
+    required this.engine,
+    required this.onChanged,
+  });
 
   final Engine engine;
   final Future<void> Function() onChanged;
@@ -34,6 +38,10 @@ class _SettingsViewState extends State<SettingsView> {
   String? _error;
   String? _saved;
   bool _busy = false;
+  int _pending = 0;
+  // Shared by views of the same engine: navigation must not start a second
+  // queue, or reload stale preferences before the first view's intents drain.
+  static final _writes = Expando<Future<void>>('settings intents');
 
   late final TextEditingController _python = TextEditingController();
   late final TextEditingController _steamRoot = TextEditingController();
@@ -60,7 +68,10 @@ class _SettingsViewState extends State<SettingsView> {
       _error = null;
     });
     try {
-      final settings = await widget.engine.readSettings();
+      final engine = widget.engine;
+      await (_writes[engine] ?? Future<void>.value());
+      if (!mounted) return;
+      final settings = await engine.readSettings();
       if (!mounted) return;
       setState(() {
         _settings = settings;
@@ -68,6 +79,10 @@ class _SettingsViewState extends State<SettingsView> {
         _steamRoot.text = settings['steam_root'] as String? ?? '';
         _cache.text = settings['download_cache'] as String? ?? '';
         _verify = settings['verify_upstream'] as bool? ?? true;
+        appTheme.value = AppThemeX.fromCode(settings['theme'] as String?);
+        appLanguage.value = AppLanguageX.fromCode(
+          settings['language'] as String?,
+        );
         _busy = false;
       });
     } on EngineException catch (e) {
@@ -79,32 +94,87 @@ class _SettingsViewState extends State<SettingsView> {
     }
   }
 
-  Future<void> _save() async {
+  /// Persists the appearance preferences the moment they change.
+  ///
+  /// Deliberately not deferred to the Save button: a colour scheme is applied
+  /// instantly, so leaving it unsaved until an unrelated Save would have the window
+  /// looking one way and behaving another after a restart. The language picker had
+  /// exactly that problem — it wrote to the notifier and nothing else, so the choice
+  /// was gone on the next launch even though the docstring claimed it was stored.
+  Future<void> _enqueue(Future<void> Function() write) {
     setState(() {
-      _busy = true;
+      _pending++;
       _error = null;
       _saved = null;
     });
+    final engine = widget.engine;
+    final next = (_writes[engine] ?? Future<void>.value()).then((_) async {
+      try {
+        await write();
+        if (mounted) {
+          setState(() {
+            _error = null;
+            _saved = 'settings.saved';
+          });
+        }
+      } on EngineException catch (error) {
+        if (mounted) {
+          setState(() {
+            _error = error.message;
+            _saved = null;
+          });
+        }
+      } finally {
+        if (mounted) setState(() => _pending--);
+      }
+    });
+    // An unexpected programming error is still observable by the caller, but
+    // must not poison later user requests in the queue.
+    _writes[engine] = next.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return next;
+  }
+
+  Future<void> _savePreferences() {
+    final engine = widget.engine;
+    final theme = appTheme.value.code;
+    final language = appLanguage.value.code;
+    return _enqueue(() async {
+      await engine.writeSettings(theme: theme, language: language);
+    });
+  }
+
+  Future<void> _save() async {
+    final engine = widget.engine;
+    final onChanged = widget.onChanged;
+    final python = _python.text.trim();
+    final steam = _steamRoot.text.trim();
+    final cache = _cache.text.trim();
+    final verify = _verify;
+    final theme = appTheme.value.code;
+    final language = appLanguage.value.code;
+    setState(() => _busy = true);
     try {
-      final settings = await widget.engine.writeSettings(
-        pythonPath: _python.text.trim(),
-        steamRoot: _steamRoot.text.trim(),
-        downloadCache: _cache.text.trim(),
-        verifyUpstream: _verify,
-      );
-      if (!mounted) return;
-      setState(() {
-        _settings = settings;
-        _busy = false;
-        _saved = 'settings.saved';
+      await _enqueue(() async {
+        // Snapshot at intent time, in the same sequence as picker changes. Save
+        // also retries appearance after a failed auto-save; any later picker
+        // intent necessarily executes afterwards and remains authoritative.
+        final settings = await engine.writeSettings(
+          pythonPath: python,
+          steamRoot: steam,
+          downloadCache: cache,
+          verifyUpstream: verify,
+          theme: theme,
+          language: language,
+        );
+        if (!mounted) return;
+        setState(() => _settings = settings);
+        await onChanged();
       });
-      await widget.onChanged();
-    } on EngineException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = e.message;
-      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -113,7 +183,12 @@ class _SettingsViewState extends State<SettingsView> {
     final theme = Theme.of(context);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.xl, AppSpace.xl, AppSpace.xxl),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.xl,
+        AppSpace.xl,
+        AppSpace.xl,
+        AppSpace.xxl,
+      ),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 780),
@@ -131,13 +206,13 @@ class _SettingsViewState extends State<SettingsView> {
                   mono: _error,
                   tone: AppColors.danger(context),
                   icon: Icons.error_outline,
-                )
-              else if (_settings == null)
+                ),
+              if (_settings == null && _error == null)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: AppSpace.xxl),
                   child: Center(child: CircularProgressIndicator()),
                 )
-              else ...[
+              else if (_settings != null) ...[
                 _TextField(
                   label: context.t('settings.python'),
                   hint: context.t('settings.pythonHint'),
@@ -166,13 +241,45 @@ class _SettingsViewState extends State<SettingsView> {
                   dense: true,
                   value: _verify,
                   onChanged: (value) => setState(() => _verify = value),
-                  title: Text(context.t('settings.verify'), style: AppText.label),
+                  title: Text(
+                    context.t('settings.verify'),
+                    style: AppText.label,
+                  ),
                   subtitle: Text(
                     context.t('settings.verifyHelp'),
                     style: AppText.caption.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
+                ),
+
+                const SizedBox(height: AppSpace.lg),
+                Text(context.t('settings.theme'), style: AppText.label),
+                const SizedBox(height: AppSpace.xs),
+                Text(
+                  context.t('settings.themeHelp'),
+                  style: AppText.caption.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: AppSpace.sm),
+                ValueListenableBuilder<AppTheme>(
+                  valueListenable: appTheme,
+                  builder:
+                      (context, scheme, _) => SegmentedButton<AppTheme>(
+                        segments: [
+                          for (final option in AppTheme.values)
+                            ButtonSegment(
+                              value: option,
+                              label: Text(option.label),
+                            ),
+                        ],
+                        selected: {scheme},
+                        onSelectionChanged: (values) {
+                          appTheme.value = values.first;
+                          _savePreferences();
+                        },
+                      ),
                 ),
 
                 const SizedBox(height: AppSpace.lg),
@@ -187,18 +294,27 @@ class _SettingsViewState extends State<SettingsView> {
                 const SizedBox(height: AppSpace.sm),
                 ValueListenableBuilder<AppLanguage>(
                   valueListenable: appLanguage,
-                  builder: (context, preference, _) => SegmentedButton<AppLanguage>(
-                    segments: [
-                      for (final option in AppLanguage.values)
-                        ButtonSegment(value: option, label: Text(option.label)),
-                    ],
-                    selected: {preference},
-                    onSelectionChanged: (values) => appLanguage.value = values.first,
-                  ),
+                  builder:
+                      (context, preference, _) => SegmentedButton<AppLanguage>(
+                        segments: [
+                          for (final option in AppLanguage.values)
+                            ButtonSegment(
+                              value: option,
+                              label: Text(option.label),
+                            ),
+                        ],
+                        selected: {preference},
+                        onSelectionChanged: (values) {
+                          appLanguage.value = values.first;
+                          _savePreferences();
+                        },
+                      ),
                 ),
 
                 const SizedBox(height: AppSpace.xl),
-                Row(
+                Wrap(
+                  spacing: AppSpace.md,
+                  runSpacing: AppSpace.sm,
                   children: [
                     HoldButton(
                       emphasized: true,
@@ -207,16 +323,25 @@ class _SettingsViewState extends State<SettingsView> {
                       busy: _busy,
                       onPressed: _busy ? null : _save,
                     ),
-                    const SizedBox(width: AppSpace.md),
                     HoldButton(
                       label: context.t('common.reload'),
                       icon: Icons.refresh,
-                      onPressed: _busy ? null : _load,
+                      onPressed: _busy || _pending > 0 ? null : _load,
                     ),
                   ],
                 ),
 
-                if (_saved != null) ...[
+                if (_pending > 0) ...[
+                  const SizedBox(height: AppSpace.md),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      context.t('settings.pending'),
+                      style: AppText.label,
+                    ),
+                  ),
+                ],
+                if (_pending == 0 && _saved != null) ...[
                   const SizedBox(height: AppSpace.md),
                   Notice(
                     title: context.t(_saved!),
@@ -226,11 +351,16 @@ class _SettingsViewState extends State<SettingsView> {
                 ],
 
                 const SizedBox(height: AppSpace.xl),
-                Divider(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+                Divider(
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.5,
+                  ),
+                ),
                 const SizedBox(height: AppSpace.lg),
                 FieldRow(
                   label: context.t('settings.file'),
-                  value: 'v${_settings!['version']} — ${context.t('settings.fileNote')}',
+                  value:
+                      'v${_settings!['version']} — ${context.t('settings.fileNote')}',
                   mono: false,
                 ),
               ],
@@ -269,7 +399,9 @@ class _TextField extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             help,
-            style: AppText.caption.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: AppText.caption.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: AppSpace.sm),
           TextField(

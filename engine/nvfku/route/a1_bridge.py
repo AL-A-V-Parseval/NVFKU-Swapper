@@ -27,6 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..journal import FileJournal
+from .transaction import locked_install, preflight_files, transaction
 from ..messages import text
 from ..paths import Paths, human_size
 from ..plan import Action, Checks, InstallRefused, InstallResult, Missing, RoutePlan
@@ -482,6 +483,7 @@ def render_bridge_cfg(*, synth: bool, vk_mirror: bool = False) -> str:
     return "\n".join(lines) + "\n"
 
 
+@locked_install
 def install(
     paths: Paths,
     game: Game,
@@ -515,6 +517,8 @@ def install(
         if game.source == "steam"
         else None
     )
+    if state is not None and state.error:
+        raise InstallRefused(f"A1 requires readable Steam launch options: {state.error}")
     if state is not None and state.running:
         raise InstallRefused(
             "Steam is running (pid "
@@ -526,39 +530,6 @@ def install(
     exe_dir = game.launch_exe.parent if game.launch_exe else game.install_dir
     result = InstallResult(route=ROUTE, game=game.name, game_dir=game.install_dir)
 
-    # --- 0. launch options ------------------------------------------------
-    #
-    # First, because it is the step most likely to be impossible: if it fails,
-    # nothing has been written into the game directory yet.
-    if state is not None and state.error:
-        # No config file, or more than one account, or a malformed one. The launch
-        # options cannot be written, but nothing would revert them either, so the
-        # file install proceeds and the reason is reported.
-        logger(f"launch options not written: {state.error}")
-        result.warnings.append(f"launch options not written: {state.error}")
-    elif state is not None and route_plan.launch_options:
-        try:
-            write = set_launch_options(
-                paths, game.appid, route_plan.launch_options, proc_root=proc_root
-            )
-        except SteamConfigError as exc:
-            raise InstallRefused(
-                f"the launch options could not be written: {exc}"
-            ) from None
-        logger(f"steam launch options set to {route_plan.launch_options}")
-        result.launch_options = route_plan.launch_options
-        result.verified.append(
-            f"launch options written ({'added' if write.created_key else 'updated'}); "
-            f"backup {write.backup}"
-        )
-        # Recorded so a rollback can put the previous value back. The Steam config
-        # lives outside the game directory, which `FileJournal` refuses to touch,
-        # so this is carried in the result rather than journalled as a file.
-        result.notes.append(
-            "launch options before this install: "
-            + (state.current if state.current else "(none set)")
-        )
-
     # --- 1. fetch and verify components (network first, disk second) -------
     logger("fetching components")
     sources: dict[str, Path] = {}
@@ -566,25 +537,35 @@ def install(
     if verify_against_upstream:
         try:
             sums_file = providers.fetch_asset(
-                providers.PINNED["dlss5-bridge"], "SHA256SUMS.txt", paths, logger=logger
+                providers.PINNED["dlss5-bridge"], "SHA256SUMS.txt", paths,
+                logger=logger, skip_download=skip_download
             )
             sums = providers.parse_shasums(sums_file.read_text(encoding="utf-8", errors="replace"))
         except Exception as exc:
             logger(f"  note: upstream SHA256SUMS unavailable ({exc}); sizes still checked")
     for key in ("dlss5-bridge", "addon-dlssnr-linux", "addon-dlssnr-linux-forwarder"):
         component = providers.PINNED[key]
-        if skip_download and not component.local_path(paths).is_file():
-            raise InstallRefused(
-                f"{component.name} is not cached and --skip-download was given"
-            )
-        sources[key] = providers.fetch(component, paths, logger=logger) if not skip_download else component.local_path(paths)
+        try:
+            sources[key] = providers.fetch(component, paths, logger=logger, skip_download=skip_download)
+        except ValueError as exc:
+            raise InstallRefused(str(exc)) from exc
+        digest_verified = False
+        if component.sha256:
+            result.verified.append(f"{component.name} matches the pinned SHA-256")
+            digest_verified = True
         if sums:
             verified, message = providers.verify_against_shasums(sources[key], sums, logger=logger)
             if verified:
                 result.verified.append(message)
                 logger(f"  verify   {message}")
+                digest_verified = True
             elif "does NOT match" in message:
                 raise InstallRefused(f"upstream digest mismatch: {message}")
+        if not digest_verified:
+            level = "size-only" if component.size is not None else "unverified"
+            warning = f"{component.name}: {level}; no upstream or pinned SHA-256 verified"
+            result.warnings.append(warning)
+            logger(f"  warning  {warning}")
 
     # --- 2. the game-local DLSS NR model ----------------------------------
     candidates = discover_models(paths, game)
@@ -602,57 +583,96 @@ def install(
             f"(using sha256 {chosen.sha256[:16]}...); watch ReShade.log for crashes"
         )
 
+    preflight_files(game.install_dir, sources.values(), [
+        exe_dir / BRIDGE_ADDON, exe_dir / ADDON_DLL, exe_dir / ADDON_FORWARDER,
+        exe_dir / BRIDGE_CFG, model_dest,
+    ])
+    preflight_files(game.install_dir, [chosen.path], [])
+
     # --- 3. apply, journalled ---------------------------------------------
     journal = FileJournal(paths, game.install_dir, ROUTE, game_key=game.key)
     result.journal_id = journal.journal_id
     logger(f"journal {journal.journal_id} in {journal.dir}")
 
-    for order, (key, filename, label) in enumerate(
-        (
-            ("dlss5-bridge", BRIDGE_ADDON, "dlss5-bridge add-on"),
-            ("addon-dlssnr-linux", ADDON_DLL, "DLSSNR feature-18 add-on"),
-            ("addon-dlssnr-linux-forwarder", ADDON_FORWARDER, "NGX forwarder"),
+    with transaction(journal):
+        # Recheck after downloads: Steam may have started while they ran.
+        state = steam_state(paths, game.appid, proc_root=proc_root) if game.source == "steam" else None
+        if state is not None and state.error:
+            raise InstallRefused(
+                f"A1 requires Steam launch options, but they could not be read: {state.error}"
+            )
+        if state is not None and state.running:
+            raise InstallRefused("Steam started during download; exit Steam and retry.")
+        if state is not None and route_plan.launch_options:
+            steam_op = journal.snapshot_external(state.config, source_label="Steam launch options", steam_config=True)
+            try:
+                write = set_launch_options(
+                    paths, game.appid, route_plan.launch_options, proc_root=proc_root
+                )
+            except SteamConfigError as exc:
+                raise InstallRefused(
+                    f"the launch options could not be written: {exc}"
+                ) from None
+            journal.seal_external(steam_op)
+            logger(f"steam launch options set to {route_plan.launch_options}")
+            result.launch_options = route_plan.launch_options
+            result.verified.append(
+                f"launch options written ({'added' if write.created_key else 'updated'}); "
+                f"backup {write.backup}"
+            )
+            result.notes.append(
+                "launch options before this install: "
+                + (state.current if state.current else "(none set)")
+            )
+
+        for order, (key, filename, label) in enumerate(
+            (
+                ("dlss5-bridge", BRIDGE_ADDON, "dlss5-bridge add-on"),
+                ("addon-dlssnr-linux", ADDON_DLL, "DLSSNR feature-18 add-on"),
+                ("addon-dlssnr-linux-forwarder", ADDON_FORWARDER, "NGX forwarder"),
+            )
+        ):
+            logger(f"  [{order + 1}/5] {label}")
+            journal.install_file(sources[key], exe_dir / filename, source_label=label)
+
+        logger("  [4/5] bridge configuration (unwrap=0)")
+        synth = not bool(game.native_dlss)
+        journal.write_text(
+            exe_dir / BRIDGE_CFG,
+            render_bridge_cfg(synth=synth),
+            source_label="nvfku generated",
         )
-    ):
-        logger(f"  [{order + 1}/5] {label}")
-        journal.install_file(sources[key], exe_dir / filename, source_label=label)
 
-    logger("  [4/5] bridge configuration (unwrap=0)")
-    synth = not bool(game.native_dlss)
-    journal.write_text(
-        exe_dir / BRIDGE_CFG,
-        render_bridge_cfg(synth=synth),
-        source_label="nvfku generated",
-    )
+        logger(f"  [5/5] {NR_MODEL_NAME}")
+        if chosen.path.parent == exe_dir:
+            # Already in place: no copy, and no journal entry.  A "note" here would
+            # have to point at the game directory rather than the file, which makes
+            # the journal less useful, not more; `notes` on the result carries it
+            # instead.
+            result.notes.append(f"{NR_MODEL_NAME} already beside the executable; left unchanged")
+        else:
+            journal.install_file(chosen.path, model_dest, source_label=f"NVIDIA model ({chosen.verdict})")
 
-    logger(f"  [5/5] {NR_MODEL_NAME}")
-    if chosen.path.parent == exe_dir:
-        # Already in place: no copy, and no journal entry.  A "note" here would
-        # have to point at the game directory rather than the file, which makes
-        # the journal less useful, not more; `notes` on the result carries it
-        # instead.
-        result.notes.append(f"{NR_MODEL_NAME} already beside the executable; left unchanged")
-    else:
-        journal.install_file(chosen.path, model_dest, source_label=f"NVIDIA model ({chosen.verdict})")
-
-    journal.finish()
-
-    # --- 4. record what was done ------------------------------------------
-    state = providers.read_route_state(paths, game.key, ROUTE)
-    state.update(
-        {
-            "installed_at": journal._journal.created_at,
-            "journal_id": journal.journal_id,
-            "exe_dir": str(exe_dir),
-            "model_source": str(chosen.path),
-            "model_sha256": chosen.sha256,
-            "model_verdict": chosen.verdict,
-            "synth": synth,
-            "components": {key: providers.PINNED[key].version for key in sources},
-        }
-    )
-    providers.write_route_state(paths, game.key, ROUTE, state)
-    result.notes.append(f"state written to {providers.route_state_path(paths, game.key, ROUTE)}")
+        # --- 4. record what was done ------------------------------------------
+        state_op = journal.snapshot_external(
+            providers.route_state_path(paths, game.key, ROUTE), source_label="route state"
+        )
+        state = providers.read_route_state(paths, game.key, ROUTE)
+        state.update(
+            {
+                "installed_at": journal._journal.created_at,
+                "journal_id": journal.journal_id,
+                "exe_dir": str(exe_dir),
+                "model_source": str(chosen.path),
+                "model_sha256": chosen.sha256,
+                "model_verdict": chosen.verdict,
+                "synth": synth,
+                "components": {key: providers.PINNED[key].version for key in sources},
+            }
+        )
+        providers.write_route_state(paths, game.key, ROUTE, state)
+        journal.seal_external(state_op)
+        result.notes.append(f"state written to {providers.route_state_path(paths, game.key, ROUTE)}")
 
     # --- 5. what the user still has to do ---------------------------------
     if not (exe_dir / RESHADE_PROXY_DLL).is_file():
